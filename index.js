@@ -6,21 +6,25 @@ const { getUser } = require('./db');
 const app = express();
 app.use(express.json());
 
+// Helpful crash logs in Railway
+process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
+process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
+
 // Discord bot
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-client.once('clientReady', () => {
+client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
 // Slash commands
-client.on('interactionCreate', async interaction => {
+client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'ref') {
-    await interaction.reply({
+    return interaction.reply({
       content: 'DM mods to get your personalized referral link.',
       ephemeral: true,
     });
@@ -28,8 +32,7 @@ client.on('interactionCreate', async interaction => {
 
   if (interaction.commandName === 'refstats') {
     const user = getUser(interaction.user.id);
-
-    await interaction.reply({
+    return interaction.reply({
       content: `You have **${user.referrals} / 3** successful referrals.`,
       ephemeral: true,
     });
@@ -48,4 +51,13 @@ app.listen(PORT, () => {
   console.log(`🚀 Webhook listening on port ${PORT}`);
 });
 
-client.login(process.env.DISCORD_TOKEN);
+// Validate env + login
+if (!process.env.DISCORD_TOKEN) {
+  console.error('❌ Missing DISCORD_TOKEN env var');
+  process.exit(1);
+}
+
+client.login(process.env.DISCORD_TOKEN).catch((err) => {
+  console.error('❌ Discord login failed:', err);
+  process.exit(1);
+});
