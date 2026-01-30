@@ -4,19 +4,17 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { getUser } = require('./db');
 
 const app = express();
-
-// Helpful crash logs in Railway
-process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
-process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
-
-// Normal JSON parsing for regular routes (NOT for Whop)
 app.use(express.json());
 
-// Mount Whop webhook router (uses express.raw inside webhook.js)
-const whopWebhook = require('./webhook');
-app.use('/webhooks', whopWebhook);
+// ===== Safety logs =====
+process.on('unhandledRejection', (err) =>
+  console.error('unhandledRejection:', err)
+);
+process.on('uncaughtException', (err) =>
+  console.error('uncaughtException:', err)
+);
 
-// Discord bot
+// ===== Discord bot =====
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
@@ -25,7 +23,6 @@ client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// Slash commands
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -45,24 +42,31 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// Health check (so you can open the URL in a browser and see it's alive)
+// ===== Health route (for Railway browser check) =====
 app.get('/', (req, res) => {
-  res.status(200).send('✅ WSD Referrals Bot is running');
+  res.status(200).send('WSD Referrals Bot is running.');
 });
 
-// Start web server (Railway provides PORT)
-const PORT = process.env.PORT || 3000;
+// ===== Whop webhook =====
+app.post('/webhooks/whop', (req, res) => {
+  console.log('📩 Whop webhook received');
+  console.log(JSON.stringify(req.body, null, 2));
+
+  // Later: parse req.body + increment referrals here
+
+  res.sendStatus(200);
+});
+
+// ===== Start server =====
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
 });
 
-// Validate env + login
+// ===== Login Discord =====
 if (!process.env.DISCORD_TOKEN) {
-  console.error('❌ Missing DISCORD_TOKEN env var');
+  console.error('❌ Missing DISCORD_TOKEN');
   process.exit(1);
 }
 
-client.login(process.env.DISCORD_TOKEN).catch((err) => {
-  console.error('❌ Discord login failed:', err);
-  process.exit(1);
-});
+client.login(process.env.DISCORD_TOKEN);

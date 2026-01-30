@@ -1,13 +1,28 @@
 const express = require('express');
-const app = express();
 
-app.use(express.json());
+const router = express.Router();
 
-app.post('/webhooks/whop', (req, res) => {
-  console.log('📩 Whop event received:', req.body);
-  res.sendStatus(200);
-});
+// IMPORTANT: use raw body for Whop (needed for signature verification later)
+router.post(
+  '/whop',
+  express.raw({ type: '*/*' }),
+  (req, res) => {
+    try {
+      const payload = req.body.toString();
+      console.log('📩 Whop webhook received');
+      console.log(payload);
 
-app.listen(3000, () => {
-  console.log('🚀 Webhook listening on port 3000');
-});
+      // TODO later:
+      // 1) Verify webhook signature
+      // 2) Parse event
+      // 3) Increment referrals
+
+      res.sendStatus(200);
+    } catch (err) {
+      console.error('❌ Whop webhook error:', err);
+      res.sendStatus(400);
+    }
+  }
+);
+
+module.exports = router;
