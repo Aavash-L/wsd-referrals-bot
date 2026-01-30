@@ -6,18 +6,12 @@ const { getUser } = require('./db');
 const app = express();
 app.use(express.json());
 
-// ===== Safety logs =====
-process.on('unhandledRejection', (err) =>
-  console.error('unhandledRejection:', err)
-);
-process.on('uncaughtException', (err) =>
-  console.error('uncaughtException:', err)
-);
+// Safety logs
+process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
+process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
 
-// ===== Discord bot =====
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
-});
+// Discord bot
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
@@ -42,31 +36,30 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// ===== Health route (for Railway browser check) =====
-app.get('/', (req, res) => {
-  res.status(200).send('WSD Referrals Bot is running.');
-});
+// Health route
+app.get('/', (req, res) => res.status(200).send('WSD Referrals Bot is running.'));
 
-// ===== Whop webhook =====
+// Webhook endpoint (Whop will call this)
 app.post('/webhooks/whop', (req, res) => {
   console.log('📩 Whop webhook received');
   console.log(JSON.stringify(req.body, null, 2));
-
-  // Later: parse req.body + increment referrals here
-
   res.sendStatus(200);
 });
 
-// ===== Start server =====
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-  console.log(`🚀 Server listening on port ${PORT}`);
+// Test endpoint (YOU can hit this now)
+app.post('/webhooks/whop/test', (req, res) => {
+  console.log('🧪 Test webhook hit');
+  console.log(JSON.stringify(req.body, null, 2));
+  res.json({ ok: true, received: req.body });
 });
 
-// ===== Login Discord =====
+// Start server
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
+
+// Login Discord
 if (!process.env.DISCORD_TOKEN) {
   console.error('❌ Missing DISCORD_TOKEN');
   process.exit(1);
 }
-
 client.login(process.env.DISCORD_TOKEN);
