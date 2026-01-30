@@ -4,11 +4,17 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { getUser } = require('./db');
 
 const app = express();
-app.use(express.json());
 
 // Helpful crash logs in Railway
 process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
 process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
+
+// Normal JSON parsing for regular routes (NOT for Whop)
+app.use(express.json());
+
+// Mount Whop webhook router (uses express.raw inside webhook.js)
+const whopWebhook = require('./webhook');
+app.use('/webhooks', whopWebhook);
 
 // Discord bot
 const client = new Client({
@@ -39,16 +45,15 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// Webhook placeholder (Whop will hit this later)
-app.post('/webhooks/whop', (req, res) => {
-  console.log('📩 Whop event received:', req.body);
-  res.sendStatus(200);
+// Health check (so you can open the URL in a browser and see it's alive)
+app.get('/', (req, res) => {
+  res.status(200).send('✅ WSD Referrals Bot is running');
 });
 
-// Start everything
+// Start web server (Railway provides PORT)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Webhook listening on port ${PORT}`);
+  console.log(`🚀 Server listening on port ${PORT}`);
 });
 
 // Validate env + login
