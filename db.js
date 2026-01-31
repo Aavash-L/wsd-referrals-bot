@@ -21,7 +21,6 @@ db.exec(`
   );
 `);
 
-// ---------- Helpers ----------
 function ensureUser(discordId) {
   db.prepare(`INSERT OR IGNORE INTO users (discord_user_id) VALUES (?)`).run(discordId);
 }
@@ -42,7 +41,7 @@ function addReferral(discordId) {
   return getUser(discordId);
 }
 
-// Create or return a stable referral code for a user
+// stable referral code per user
 function getOrCreateRefCode(discordId) {
   ensureUser(discordId);
 
@@ -64,11 +63,10 @@ function lookupDiscordIdByRefCode(code) {
   return row?.discord_user_id || null;
 }
 
-// Deduping so same invoice/event never counts twice
+// Deduping (never count same invoice twice)
 function isEventCounted(eventId) {
   if (!eventId) return false;
-  const row = db.prepare(`SELECT event_id FROM counted_events WHERE event_id = ?`).get(eventId);
-  return !!row;
+  return !!db.prepare(`SELECT event_id FROM counted_events WHERE event_id = ?`).get(eventId);
 }
 
 function markEventCounted(eventId) {
