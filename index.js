@@ -159,10 +159,10 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.commandName === "refstats") {
     const user = getUser(interaction.user.id);
-    return interaction.reply({
-      content: `You have **${user.referrals} / 3** successful referrals.`,
-      ephemeral: true,
-    });
+return interaction.reply({
+  content: `📈 **Referral Progress**\n👤 ${interaction.user}\n✅ **${user.referrals} / 3** successful referrals`,
+});
+
   }
 });
 
