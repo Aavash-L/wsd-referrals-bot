@@ -149,12 +149,12 @@ client.on("interactionCreate", async (interaction) => {
     const code = getOrCreateRefCode(interaction.user.id);
     const link = buildReferralLink(code);
 
-    return interaction.reply({
-      content: link
-        ? `Here’s your referral link:\n${link}`
-        : `Here’s your referral code:\n\`${code}\`\n\n(Set WHOP_CHECKOUT_URL to show a full link.)`,
-      ephemeral: true,
-    });
+return interaction.reply({
+  content: link
+    ? `🔗 ${interaction.user}’s referral link:\n${link}`
+    : `🔗 ${interaction.user}’s referral code:\n\`${code}\`\n\n(Set WHOP_CHECKOUT_URL to show a full link.)`,
+});
+
   }
 
   if (interaction.commandName === "refstats") {
