@@ -56,18 +56,29 @@ app.get("/", (req, res) => res.status(200).send("ok"));
 app.get("/health", (req, res) => res.status(200).json({ ok: true }));
 app.get("/webhooks/whop", (req, res) => res.status(200).send("whop webhook endpoint alive"));
 
-app.get("/admin/debug/user", (req, res) => {
+app.post("/admin/test/credit", (req, res) => {
   const expected = (process.env.ADMIN_TEST_KEY || "").replace(/^"+|"+$/g, "");
   const got = (req.query.key || "").replace(/^"+|"+$/g, "");
 
-  if (!expected || got !== expected) return res.status(401).json({ error: "Unauthorized" });
+  if (!expected || got !== expected) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
-  const discordId = req.query.discordId;
+  const { discordId, count } = req.body || {};
   if (!discordId) return res.status(400).json({ error: "missing discordId" });
 
-  const user = getUser(discordId);
-  return res.json({ ok: true, user });
+  const n = Number(count ?? 1);
+  if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ error: "invalid count" });
+
+  try {
+    const updated = require("./db").manualAddReferral(String(discordId), n);
+    return res.json({ ok: true, user: updated });
+  } catch (e) {
+    console.error("admin credit failed:", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
 });
+
 
 
 
