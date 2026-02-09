@@ -83,3 +83,15 @@ module.exports = {
   isEventCounted,
   markEventCounted,
 };
+
+
+function manualAddReferral(discordId, amount = 1) {
+  const user = getUser(discordId);
+  if (!user) return null;
+
+  user.referrals += amount;
+  saveDB();
+  return user;
+}
+
+module.exports.manualAddReferral = manualAddReferral;

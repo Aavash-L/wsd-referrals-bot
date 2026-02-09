@@ -141,6 +141,17 @@ async function awardIfNeeded(discordUserId) {
   }
 }
 
+
+
+const { manualAddReferral } = require("./db");
+
+manualAddReferral("1381064337229217892", 1);
+console.log("✅ Manually credited El Fredy with 1 referral");
+
+
+
+
+
 // ---- slash commands ----
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
