@@ -1,102 +1,139 @@
-const fs = require("fs");
-const path = require("path");
-const Database = require("better-sqlite3");
+// db.js (Postgres-backed, persistent)
+// Keeps same public API you already use:
+// getUser, addReferral, markRewarded, getOrCreateRefCode, lookupDiscordIdByRefCode,
+// isEventCounted, markEventCounted, manualAddReferral
 
-// Use Railway persistent volume path if provided
-// Set in Railway Variables: DB_PATH=/data/data.db
-const DB_PATH = process.env.DB_PATH
-  ? String(process.env.DB_PATH).replace(/^"+|"+$/g, "")
-  : path.join(__dirname, "data.db");
+const { Pool } = require("pg");
 
-// Ensure the directory exists (important for /data on Railway)
-try {
-  const dir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-} catch (e) {
-  console.error("DB_PATH directory create failed:", e);
+const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+  console.error("❌ Missing DATABASE_URL. Add it from Railway Postgres -> service variable reference.");
+  // fail fast so you don't think it's "working" while still using ephemeral sqlite
+  process.exit(1);
 }
 
-// Open DB
-const db = new Database(DB_PATH);
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false },
+});
 
-// ---------- Tables ----------
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    discord_user_id TEXT PRIMARY KEY,
-    referrals INTEGER DEFAULT 0,
-    rewarded INTEGER DEFAULT 0
+let _initialized = false;
+
+async function init() {
+  if (_initialized) return;
+  _initialized = true;
+
+  // Tables (same logical schema as your sqlite)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      discord_user_id TEXT PRIMARY KEY,
+      referrals INTEGER DEFAULT 0,
+      rewarded INTEGER DEFAULT 0
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ref_codes (
+      code TEXT PRIMARY KEY,
+      discord_user_id TEXT NOT NULL REFERENCES users(discord_user_id) ON DELETE CASCADE,
+      created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS counted_events (
+      event_id TEXT PRIMARY KEY,
+      created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
+    );
+  `);
+
+  // Helpful indexes
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ref_codes_user ON ref_codes(discord_user_id);`);
+}
+
+async function ensureUser(discordId) {
+  await init();
+  await pool.query(
+    `INSERT INTO users (discord_user_id) VALUES ($1)
+     ON CONFLICT (discord_user_id) DO NOTHING`,
+    [discordId]
+  );
+}
+
+async function getUser(discordId) {
+  await ensureUser(discordId);
+  const { rows } = await pool.query(`SELECT * FROM users WHERE discord_user_id = $1`, [discordId]);
+  return rows[0] || null;
+}
+
+async function markRewarded(discordId) {
+  await ensureUser(discordId);
+  await pool.query(`UPDATE users SET rewarded = 1 WHERE discord_user_id = $1`, [discordId]);
+}
+
+async function addReferral(discordId) {
+  await ensureUser(discordId);
+  await pool.query(`UPDATE users SET referrals = referrals + 1 WHERE discord_user_id = $1`, [discordId]);
+  return await getUser(discordId);
+}
+
+async function manualAddReferral(discordId, count = 1) {
+  await ensureUser(discordId);
+  await pool.query(
+    `UPDATE users SET referrals = referrals + $1 WHERE discord_user_id = $2`,
+    [count, discordId]
+  );
+  return await getUser(discordId);
+}
+
+// stable referral code per user (same idea as your sqlite version)
+async function getOrCreateRefCode(discordId) {
+  await ensureUser(discordId);
+
+  const existing = await pool.query(
+    `SELECT code FROM ref_codes
+     WHERE discord_user_id = $1
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [discordId]
   );
 
-  CREATE TABLE IF NOT EXISTS ref_codes (
-    code TEXT PRIMARY KEY,
-    discord_user_id TEXT NOT NULL,
-    created_at INTEGER DEFAULT (strftime('%s','now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS counted_events (
-    event_id TEXT PRIMARY KEY,
-    created_at INTEGER DEFAULT (strftime('%s','now'))
-  );
-`);
-
-function ensureUser(discordId) {
-  db.prepare(`INSERT OR IGNORE INTO users (discord_user_id) VALUES (?)`).run(discordId);
-}
-
-function getUser(discordId) {
-  ensureUser(discordId);
-  return db.prepare(`SELECT * FROM users WHERE discord_user_id = ?`).get(discordId);
-}
-
-function markRewarded(discordId) {
-  ensureUser(discordId);
-  db.prepare(`UPDATE users SET rewarded = 1 WHERE discord_user_id = ?`).run(discordId);
-}
-
-function addReferral(discordId) {
-  ensureUser(discordId);
-  db.prepare(`UPDATE users SET referrals = referrals + 1 WHERE discord_user_id = ?`).run(discordId);
-  return getUser(discordId);
-}
-
-function manualAddReferral(discordId, count = 1) {
-  ensureUser(discordId);
-  const n = Number(count ?? 1);
-  db.prepare("UPDATE users SET referrals = referrals + ? WHERE discord_user_id = ?").run(n, discordId);
-  return getUser(discordId);
-}
-
-// stable referral code per user
-function getOrCreateRefCode(discordId) {
-  ensureUser(discordId);
-
-  const existing = db
-    .prepare(`SELECT code FROM ref_codes WHERE discord_user_id = ? ORDER BY created_at DESC LIMIT 1`)
-    .get(discordId);
-
-  if (existing?.code) return existing.code;
+  if (existing.rows?.[0]?.code) return existing.rows[0].code;
 
   const rand = Math.random().toString(36).slice(2, 8);
   const code = `${discordId}-${rand}`.slice(0, 48);
 
-  db.prepare(`INSERT INTO ref_codes (code, discord_user_id) VALUES (?, ?)`).run(code, discordId);
+  await pool.query(
+    `INSERT INTO ref_codes (code, discord_user_id) VALUES ($1, $2)`,
+    [code, discordId]
+  );
+
   return code;
 }
 
-function lookupDiscordIdByRefCode(code) {
-  const row = db.prepare(`SELECT discord_user_id FROM ref_codes WHERE code = ?`).get(code);
-  return row?.discord_user_id || null;
+async function lookupDiscordIdByRefCode(code) {
+  await init();
+  const { rows } = await pool.query(`SELECT discord_user_id FROM ref_codes WHERE code = $1`, [code]);
+  return rows?.[0]?.discord_user_id || null;
 }
 
 // Deduping (never count same invoice twice)
-function isEventCounted(eventId) {
+async function isEventCounted(eventId) {
+  await init();
   if (!eventId) return false;
-  return !!db.prepare(`SELECT event_id FROM counted_events WHERE event_id = ?`).get(eventId);
+  const { rows } = await pool.query(`SELECT event_id FROM counted_events WHERE event_id = $1`, [eventId]);
+  return !!rows?.[0];
 }
 
-function markEventCounted(eventId) {
+async function markEventCounted(eventId) {
+  await init();
   if (!eventId) return;
-  db.prepare(`INSERT OR IGNORE INTO counted_events (event_id) VALUES (?)`).run(eventId);
+  await pool.query(
+    `INSERT INTO counted_events (event_id) VALUES ($1)
+     ON CONFLICT (event_id) DO NOTHING`,
+    [eventId]
+  );
 }
 
 module.exports = {

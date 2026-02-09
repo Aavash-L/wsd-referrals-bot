@@ -1,3 +1,5 @@
+
+
 require("dotenv").config();
 
 const crypto = require("crypto");
@@ -13,6 +15,7 @@ const {
   isEventCounted,
   markEventCounted,
   manualAddReferral, // make sure this exists in db.js exports
+  setReferrals, // make sure this exists in db.js exports
 } = require("./db");
 
 const app = express();
@@ -44,16 +47,19 @@ const client = new Client({
   partials: [Partials.GuildMember],
 });
 
+// (discord.js v14+ uses "clientReady", but "ready" still works w/ warning)
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
 // ---- middleware ----
 app.use((req, res, next) => {
-  if (req.path === "/webhooks/whop") return next(); // raw body there
+  // raw body only for webhook verify
+  if (req.path === "/webhooks/whop") return next();
   return express.json()(req, res, next);
 });
 
+// ---- basic routes ----
 app.get("/", (req, res) => res.status(200).send("ok"));
 app.get("/health", (req, res) => res.status(200).json({ ok: true }));
 app.get("/webhooks/whop", (req, res) =>
@@ -94,6 +100,32 @@ app.post("/admin/test/credit", (req, res) => {
   }
 });
 
+// POST /admin/test/set?key=XXXX
+// body: { discordId: "123", referrals: 0..N, rewarded: 0|1 }
+app.post("/admin/test/set", (req, res) => {
+  const { expected, got } = readAdminKey(req);
+  if (!expected || got !== expected) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const { discordId, referrals, rewarded } = req.body || {};
+  if (!discordId) return res.status(400).json({ error: "missing discordId" });
+
+  // keep behavior: if not provided, default to 0
+  const r = Number(referrals ?? 0);
+  const rw = Number(rewarded ?? 0);
+
+  try {
+    // prefer imported setReferrals, but fallback to require("./db").setReferrals
+    const fn = typeof setReferrals === "function" ? setReferrals : require("./db").setReferrals;
+    const updated = fn(String(discordId), r, rw);
+    return res.json({ ok: true, user: updated });
+  } catch (e) {
+    console.error("admin set failed:", e);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
 // GET /admin/debug/user?key=XXXX&discordId=123
 app.get("/admin/debug/user", (req, res) => {
   const { expected, got } = readAdminKey(req);
@@ -108,8 +140,7 @@ app.get("/admin/debug/user", (req, res) => {
     const user = getUser(discordId);
     return res.json({
       ok: true,
-      user:
-        user || { discord_user_id: discordId, referrals: 0, rewarded: 0 },
+      user: user || { discord_user_id: discordId, referrals: 0, rewarded: 0 },
     });
   } catch (e) {
     console.error("admin debug failed:", e);
@@ -132,7 +163,7 @@ function buildReferralLink(code) {
   }
 }
 
-// ✅ fixed: deep scan now actually scans strings too
+// ✅ deep scan scans strings too
 function extractRefCode(event) {
   // 1) known paths
   const direct =
@@ -154,7 +185,7 @@ function extractRefCode(event) {
   function walk(node) {
     if (node == null) return null;
 
-    // ✅ handle strings
+    // handle strings
     if (typeof node === "string") {
       const m = node.match(targetPattern);
       return m ? m[0] : null;
