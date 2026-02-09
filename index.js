@@ -259,7 +259,37 @@ app.post("/webhooks/whop", express.raw({ type: "application/json" }), async (req
     return res.status(400).json({ ok: false, error: "bad_json" });
   }
 
-  if (DEBUG_WEBHOOKS) console.log("📩 Whop webhook type:", event?.type);
+  if (DEBUG_WEBHOOKS) {
+  // Log only keys + where ref might be, without leaking sensitive stuff
+  const pretty = (obj) => {
+    try {
+      return JSON.stringify(obj, null, 2);
+    } catch {
+      return String(obj);
+    }
+  };
+
+  console.log("📩 WHOP WEBHOOK IN:", {
+    type: event?.type,
+    topKeys: event ? Object.keys(event) : null,
+    dataKeys: event?.data ? Object.keys(event.data) : null,
+    metadata: event?.data?.metadata || event?.metadata || null,
+    // common places whop might store checkout/ref info:
+    checkout: event?.data?.checkout || null,
+    attributes: event?.data?.attributes || null,
+    // try extraction result:
+    extractedRef: extractRefCode(event),
+    extractedEventId: extractEventId(event),
+  });
+
+  // If still nothing, log full payload ONCE but remove signature-like fields
+  const cloned = JSON.parse(JSON.stringify(event || {}));
+  // remove things that could be sensitive if present
+  if (cloned?.data?.card) cloned.data.card = "[redacted]";
+  if (cloned?.data?.payment_method) cloned.data.payment_method = "[redacted]";
+  console.log("📦 WHOP FULL PAYLOAD (sanitized):", pretty(cloned));
+}
+
 
   // ✅ paid purchase only
   if (event?.type !== "invoice.paid") {
