@@ -1,5 +1,23 @@
+const fs = require("fs");
+const path = require("path");
 const Database = require("better-sqlite3");
-const db = new Database("data.db");
+
+// Use Railway persistent volume path if provided
+// Set in Railway Variables: DB_PATH=/data/data.db
+const DB_PATH = process.env.DB_PATH
+  ? String(process.env.DB_PATH).replace(/^"+|"+$/g, "")
+  : path.join(__dirname, "data.db");
+
+// Ensure the directory exists (important for /data on Railway)
+try {
+  const dir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+} catch (e) {
+  console.error("DB_PATH directory create failed:", e);
+}
+
+// Open DB
+const db = new Database(DB_PATH);
 
 // ---------- Tables ----------
 db.exec(`
@@ -41,20 +59,12 @@ function addReferral(discordId) {
   return getUser(discordId);
 }
 
-
-
 function manualAddReferral(discordId, count = 1) {
   ensureUser(discordId);
-  db.prepare(
-    "UPDATE users SET referrals = referrals + ? WHERE discord_user_id = ?"
-  ).run(count, discordId);
+  const n = Number(count ?? 1);
+  db.prepare("UPDATE users SET referrals = referrals + ? WHERE discord_user_id = ?").run(n, discordId);
   return getUser(discordId);
 }
-
-
-
-
-
 
 // stable referral code per user
 function getOrCreateRefCode(discordId) {
@@ -97,7 +107,5 @@ module.exports = {
   lookupDiscordIdByRefCode,
   isEventCounted,
   markEventCounted,
-  manualAddReferral, // ✅ ADD THIS
+  manualAddReferral,
 };
-
-
