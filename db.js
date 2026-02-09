@@ -1,7 +1,7 @@
 // db.js (Postgres-backed, persistent)
 // Keeps same public API you already use:
 // getUser, addReferral, markRewarded, getOrCreateRefCode, lookupDiscordIdByRefCode,
-// isEventCounted, markEventCounted, manualAddReferral
+// isEventCounted, markEventCounted, manualAddReferral, setReferrals
 
 const { Pool } = require("pg");
 
@@ -87,6 +87,16 @@ async function manualAddReferral(discordId, count = 1) {
   return await getUser(discordId);
 }
 
+// NEW: Set exact referrals and rewarded values (for admin endpoint)
+async function setReferrals(discordId, referrals = 0, rewarded = 0) {
+  await ensureUser(discordId);
+  await pool.query(
+    `UPDATE users SET referrals = $1, rewarded = $2 WHERE discord_user_id = $3`,
+    [referrals, rewarded, discordId]
+  );
+  return await getUser(discordId);
+}
+
 // stable referral code per user (same idea as your sqlite version)
 async function getOrCreateRefCode(discordId) {
   await ensureUser(discordId);
@@ -145,4 +155,5 @@ module.exports = {
   isEventCounted,
   markEventCounted,
   manualAddReferral,
+  setReferrals,
 };
