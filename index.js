@@ -43,19 +43,6 @@ client.once("ready", () => {
 });
 
 
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-
-  // TEMP: one-time manual credit for Hungry Boy
-  try {
-    const { manualAddReferral } = require("./db");
-    const updated = manualAddReferral("728367525326225408", 1);
-    console.log("✅ Manual credit applied to Hungry Boy:", updated);
-  } catch (e) {
-    console.error("❌ Manual credit failed:", e);
-  }
-});
-
 
 
 
