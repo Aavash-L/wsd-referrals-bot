@@ -50,6 +50,22 @@ app.use((req, res, next) => {
 
 app.get("/", (req, res) => res.status(200).send("ok"));
 app.get("/health", (req, res) => res.status(200).json({ ok: true }));
+app.get("/webhooks/whop", (req, res) => res.status(200).send("whop webhook endpoint alive"));
+
+app.get("/admin/debug/user", (req, res) => {
+  const expected = (process.env.ADMIN_TEST_KEY || "").replace(/^"+|"+$/g, "");
+  const got = (req.query.key || "").replace(/^"+|"+$/g, "");
+
+  if (!expected || got !== expected) return res.status(401).json({ error: "Unauthorized" });
+
+  const discordId = req.query.discordId;
+  if (!discordId) return res.status(400).json({ error: "missing discordId" });
+
+  const user = getUser(discordId);
+  return res.json({ ok: true, user });
+});
+
+
 
 function buildReferralLink(code) {
   if (!WHOP_CHECKOUT_URL) return null;
@@ -63,7 +79,8 @@ function buildReferralLink(code) {
 }
 
 function extractRefCode(event) {
-  return (
+  // 1) try your original known paths first
+  const direct =
     event?.data?.metadata?.ref ||
     event?.data?.metadata?.ref_code ||
     event?.data?.ref ||
@@ -71,10 +88,51 @@ function extractRefCode(event) {
     event?.metadata?.ref ||
     event?.metadata?.ref_code ||
     event?.ref ||
-    event?.ref_code ||
-    null
-  );
+    event?.ref_code;
+
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  // 2) deep scan the payload for a ref code anywhere (including URLs)
+  const targetPattern = /\b\d{10,}-[a-z0-9]{4,}\b/i; // matches like 1381064337229217892-g09pqf
+
+  const seen = new Set();
+  function walk(node) {
+    if (!node || typeof node !== "object") return null;
+    if (seen.has(node)) return null;
+    seen.add(node);
+
+    // if string contains ?ref=CODE, grab it
+    if (typeof node === "string") {
+      const m = node.match(targetPattern);
+      return m ? m[0] : null;
+    }
+
+    for (const [k, v] of Object.entries(node)) {
+      // check key names commonly used
+      if (typeof v === "string" && /ref/i.test(k)) {
+        const m = v.match(targetPattern);
+        if (m) return m[0];
+        if (v.trim()) return v.trim(); // fallback: some systems send plain code
+      }
+
+      // also check if any string value contains the code
+      if (typeof v === "string") {
+        const m = v.match(targetPattern);
+        if (m) return m[0];
+      }
+
+      // recurse
+      if (v && typeof v === "object") {
+        const found = walk(v);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  return walk(event);
 }
+
 
 function extractEventId(event) {
   return (
@@ -182,6 +240,21 @@ app.post("/webhooks/whop", express.raw({ type: "application/json" }), async (req
   let event;
   try {
     event = JSON.parse(rawBody);
+    if (DEBUG_WEBHOOKS) {
+  console.log("📦 WHOP EVENT FULL (keys):", Object.keys(event || {}));
+  console.log("📦 WHOP EVENT TYPE:", event?.type);
+  console.log("📦 WHOP EVENT DATA KEYS:", Object.keys(event?.data || {}));
+  console.log("📦 WHOP EVENT RAW:", JSON.stringify(event).slice(0, 4000)); // first 4k chars
+}
+
+    console.log("📩 WHOP WEBHOOK IN:", {
+  type: event?.type,
+  eventId: extractEventId(event),
+  keys: Object.keys(event || {}),
+  hasData: !!event?.data,
+  hasMetadata: !!(event?.data?.metadata || event?.metadata),
+});
+
   } catch {
     return res.status(400).json({ ok: false, error: "bad_json" });
   }
@@ -199,6 +272,8 @@ app.post("/webhooks/whop", express.raw({ type: "application/json" }), async (req
   }
 
   const refCode = extractRefCode(event);
+  console.log("🔎 Extracted refCode:", refCode);
+
   if (!refCode) {
     if (DEBUG_WEBHOOKS) console.warn("⚠️ invoice.paid but no ref code found");
     if (eventId) markEventCounted(eventId);
@@ -206,6 +281,8 @@ app.post("/webhooks/whop", express.raw({ type: "application/json" }), async (req
   }
 
   const discordUserId = lookupDiscordIdByRefCode(refCode);
+  console.log("👤 Ref code maps to discordUserId:", discordUserId);
+
   if (!discordUserId) {
     if (DEBUG_WEBHOOKS) console.warn("⚠️ unknown ref code:", refCode);
     if (eventId) markEventCounted(eventId);
@@ -215,6 +292,8 @@ app.post("/webhooks/whop", express.raw({ type: "application/json" }), async (req
   if (eventId) markEventCounted(eventId);
 
   const updated = addReferral(discordUserId);
+  console.log("✅ Referral added. Updated user row:", updated);
+
   if (DEBUG_WEBHOOKS) console.log(`✅ Referral counted for ${discordUserId}. Total: ${updated.referrals}`);
 
   await awardIfNeeded(discordUserId);
