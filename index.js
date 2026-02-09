@@ -28,7 +28,11 @@ const GUILD_ID = process.env.GUILD_ID;
 const REWARD_ROLE_ID = process.env.REWARD_ROLE_ID;
 const ANNOUNCE_CHANNEL_ID = process.env.ANNOUNCE_CHANNEL_ID;
 
-const WHOP_WEBHOOK_SECRET = process.env.WHOP_WEBHOOK_SECRET;
+// ✅ sanitize secret to avoid quote/space issues from Railway UI
+const WHOP_WEBHOOK_SECRET = String(process.env.WHOP_WEBHOOK_SECRET || "")
+  .replace(/^"+|"+$/g, "")
+  .trim();
+
 const WHOP_CHECKOUT_URL = process.env.WHOP_CHECKOUT_URL || "";
 const DEBUG_WEBHOOKS =
   String(process.env.DEBUG_WEBHOOKS || "").toLowerCase() === "true";
@@ -71,8 +75,12 @@ app.get("/webhooks/whop", (req, res) =>
 // -------------------------
 
 function readAdminKey(req) {
-  const expected = (process.env.ADMIN_TEST_KEY || "").replace(/^"+|"+$/g, "");
-  const got = (req.query.key || "").replace(/^"+|"+$/g, "");
+  const expected = String(process.env.ADMIN_TEST_KEY || "")
+    .replace(/^"+|"+$/g, "")
+    .trim();
+  const got = String(req.query.key || "")
+    .replace(/^"+|"+$/g, "")
+    .trim();
   return { expected, got };
 }
 
@@ -115,9 +123,17 @@ app.post("/admin/test/set", (req, res) => {
   const r = Number(referrals ?? 0);
   const rw = Number(rewarded ?? 0);
 
+  if (!Number.isFinite(r) || r < 0)
+    return res.status(400).json({ error: "invalid referrals" });
+  if (!Number.isFinite(rw) || (rw !== 0 && rw !== 1))
+    return res.status(400).json({ error: "invalid rewarded" });
+
   try {
-    // prefer imported setReferrals, but fallback to require("./db").setReferrals
-    const fn = typeof setReferrals === "function" ? setReferrals : require("./db").setReferrals;
+    const fn =
+      typeof setReferrals === "function"
+        ? setReferrals
+        : require("./db").setReferrals;
+
     const updated = fn(String(discordId), r, rw);
     return res.json({ ok: true, user: updated });
   } catch (e) {
@@ -228,13 +244,18 @@ function extractEventId(event) {
 }
 
 // Whop signature verify: `${timestamp}.${rawBody}` -> HMAC sha256 base64
+// ✅ IMPORTANT: trim header parts because Whop often formats "v1, <sig>"
 function verifyWhopSignature(rawBody, timestamp, signature, secret) {
   if (!secret) return { ok: false, reason: "missing_secret" };
   if (!timestamp || !signature) return { ok: false, reason: "missing_headers" };
 
-  const [version, provided] = String(signature).split(",");
-  if (version !== "v1" || !provided)
+  const parts = String(signature).split(",").map((s) => s.trim());
+  const version = parts[0];
+  const provided = parts[1];
+
+  if (version !== "v1" || !provided) {
     return { ok: false, reason: "bad_signature_format" };
+  }
 
   const payload = `${timestamp}.${rawBody}`;
   const expected = crypto
@@ -245,7 +266,8 @@ function verifyWhopSignature(rawBody, timestamp, signature, secret) {
   try {
     const a = Buffer.from(expected);
     const b = Buffer.from(provided);
-    if (a.length !== b.length) return { ok: false, reason: "signature_mismatch" };
+    if (a.length !== b.length)
+      return { ok: false, reason: "signature_mismatch" };
     const ok = crypto.timingSafeEqual(a, b);
     return ok ? { ok: true } : { ok: false, reason: "signature_mismatch" };
   } catch {
@@ -254,12 +276,12 @@ function verifyWhopSignature(rawBody, timestamp, signature, secret) {
 }
 
 async function awardIfNeeded(discordUserId) {
-  const user = await getUser(discordUserId);
+  const user = getUser(discordUserId);
   if (!user) return;
 
   if ((user.referrals ?? 0) >= 3 && user.rewarded !== 1) {
     // mark first to prevent double-awards
-    await markRewarded(discordUserId);
+    markRewarded(discordUserId);
 
     if (!GUILD_ID || !REWARD_ROLE_ID || !ANNOUNCE_CHANNEL_ID) {
       console.warn(
@@ -286,7 +308,6 @@ async function awardIfNeeded(discordUserId) {
   }
 }
 
-
 // -------------------------
 // Slash commands
 // -------------------------
@@ -296,7 +317,7 @@ client.on("interactionCreate", async (interaction) => {
 
   try {
     if (interaction.commandName === "ref") {
-      const code = await getOrCreateRefCode(interaction.user.id);
+      const code = getOrCreateRefCode(interaction.user.id);
       const link = buildReferralLink(code);
 
       return interaction.reply({
@@ -307,7 +328,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "refstats") {
-      const row = await getUser(interaction.user.id);
+      const row = getUser(interaction.user.id);
       const user = row || { referrals: 0, rewarded: 0 };
 
       return interaction.reply({
@@ -317,12 +338,13 @@ client.on("interactionCreate", async (interaction) => {
   } catch (err) {
     console.error("interactionCreate error:", err);
     if (!interaction.replied && !interaction.deferred) {
-      return interaction.reply({ content: "❌ Something went wrong. Try again.", ephemeral: true });
+      return interaction.reply({
+        content: "❌ Something went wrong. Try again.",
+        ephemeral: true,
+      });
     }
   }
 });
-
-
 
 // -------------------------
 // Whop webhook
@@ -343,8 +365,13 @@ app.post(
       WHOP_WEBHOOK_SECRET
     );
     if (!verified.ok) {
-      if (DEBUG_WEBHOOKS)
-        console.warn("❌ Whop signature failed:", verified.reason);
+      if (DEBUG_WEBHOOKS) {
+        console.warn("❌ Whop signature failed:", verified.reason, {
+          hasSecret: !!WHOP_WEBHOOK_SECRET,
+          sig: signature,
+          ts: timestamp,
+        });
+      }
       return res
         .status(401)
         .json({ ok: false, error: "invalid_signature", reason: verified.reason });
