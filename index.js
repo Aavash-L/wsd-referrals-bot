@@ -254,12 +254,12 @@ function verifyWhopSignature(rawBody, timestamp, signature, secret) {
 }
 
 async function awardIfNeeded(discordUserId) {
-  const user = getUser(discordUserId);
+  const user = await getUser(discordUserId);
   if (!user) return;
 
-  if (user.referrals >= 3 && user.rewarded !== 1) {
+  if ((user.referrals ?? 0) >= 3 && user.rewarded !== 1) {
     // mark first to prevent double-awards
-    markRewarded(discordUserId);
+    await markRewarded(discordUserId);
 
     if (!GUILD_ID || !REWARD_ROLE_ID || !ANNOUNCE_CHANNEL_ID) {
       console.warn(
@@ -286,34 +286,43 @@ async function awardIfNeeded(discordUserId) {
   }
 }
 
+
 // -------------------------
 // Slash commands
 // -------------------------
+
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  if (interaction.commandName === "ref") {
-    const code = getOrCreateRefCode(interaction.user.id);
-    const link = buildReferralLink(code);
+  try {
+    if (interaction.commandName === "ref") {
+      const code = await getOrCreateRefCode(interaction.user.id);
+      const link = buildReferralLink(code);
 
-    return interaction.reply({
-      content: link
-        ? `🔗 ${interaction.user}’s referral link:\n${link}`
-        : `🔗 ${interaction.user}’s referral code:\n\`${code}\`\n\n(Set WHOP_CHECKOUT_URL to show a full link.)`,
-    });
-  }
+      return interaction.reply({
+        content: link
+          ? `🔗 ${interaction.user}’s referral link:\n${link}`
+          : `🔗 ${interaction.user}’s referral code:\n\`${code}\`\n\n(Set WHOP_CHECKOUT_URL to show a full link.)`,
+      });
+    }
 
-  if (interaction.commandName === "refstats") {
-    const user = getUser(interaction.user.id) || {
-      referrals: 0,
-      rewarded: 0,
-    };
+    if (interaction.commandName === "refstats") {
+      const row = await getUser(interaction.user.id);
+      const user = row || { referrals: 0, rewarded: 0 };
 
-    return interaction.reply({
-      content: `📈 **Referral Progress**\n👤 ${interaction.user}\n✅ **${user.referrals} / 3** successful referrals`,
-    });
+      return interaction.reply({
+        content: `📈 **Referral Progress**\n👤 ${interaction.user}\n✅ **${user.referrals ?? 0} / 3** successful referrals`,
+      });
+    }
+  } catch (err) {
+    console.error("interactionCreate error:", err);
+    if (!interaction.replied && !interaction.deferred) {
+      return interaction.reply({ content: "❌ Something went wrong. Try again.", ephemeral: true });
+    }
   }
 });
+
+
 
 // -------------------------
 // Whop webhook
