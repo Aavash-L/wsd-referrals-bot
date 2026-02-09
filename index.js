@@ -143,10 +143,19 @@ async function awardIfNeeded(discordUserId) {
 
 
 
-const { manualAddReferral } = require("./db");
+client.once("ready", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 
-manualAddReferral("1381064337229217892", 1);
-console.log("✅ Manually credited El Fredy with 1 referral");
+  // TEMP: one-time manual credit for El Fredy
+  try {
+    const { manualAddReferral } = require("./db");
+    const updated = manualAddReferral("1381064337229217892", 1);
+    console.log("✅ Manual credit applied:", updated);
+  } catch (e) {
+    console.error("❌ Manual credit failed:", e);
+  }
+});
+
 
 
 

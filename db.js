@@ -41,6 +41,21 @@ function addReferral(discordId) {
   return getUser(discordId);
 }
 
+
+
+function manualAddReferral(discordId, count = 1) {
+  ensureUser(discordId);
+  db.prepare(
+    "UPDATE users SET referrals = referrals + ? WHERE discord_user_id = ?"
+  ).run(count, discordId);
+  return getUser(discordId);
+}
+
+
+
+
+
+
 // stable referral code per user
 function getOrCreateRefCode(discordId) {
   ensureUser(discordId);
@@ -82,16 +97,7 @@ module.exports = {
   lookupDiscordIdByRefCode,
   isEventCounted,
   markEventCounted,
+  manualAddReferral, // ✅ ADD THIS
 };
 
 
-function manualAddReferral(discordId, amount = 1) {
-  const user = getUser(discordId);
-  if (!user) return null;
-
-  user.referrals += amount;
-  saveDB();
-  return user;
-}
-
-module.exports.manualAddReferral = manualAddReferral;
