@@ -295,10 +295,13 @@ app.post("/webhooks/whop", express.raw({ type: "application/json" }), async (req
 }
 
 
-  // ✅ paid purchase only
-  if (event?.type !== "invoice.paid") {
-    return res.status(200).json({ ok: true, ignored: true, type: event?.type });
-  }
+
+// ✅ paid purchase only (support both legacy + v1)
+const paidTypes = new Set(["invoice.paid", "payment.succeeded"]);
+if (!paidTypes.has(event?.type)) {
+  return res.status(200).json({ ok: true, ignored: true, type: event?.type });
+}
+
 
   const eventId = extractEventId(event);
   if (eventId && isEventCounted(eventId)) {
