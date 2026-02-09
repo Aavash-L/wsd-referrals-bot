@@ -1,4 +1,4 @@
-
+//index.js - main server file for Discord referral program with Whop integration
 
 require("dotenv").config();
 
@@ -14,8 +14,8 @@ const {
   lookupDiscordIdByRefCode,
   isEventCounted,
   markEventCounted,
-  manualAddReferral, // make sure this exists in db.js exports
-  setReferrals, // make sure this exists in db.js exports
+  manualAddReferral,
+  setReferrals,
 } = require("./db");
 
 const app = express();
@@ -51,7 +51,6 @@ const client = new Client({
   partials: [Partials.GuildMember],
 });
 
-// (discord.js v14+ uses "clientReady", but "ready" still works w/ warning)
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
@@ -86,7 +85,7 @@ function readAdminKey(req) {
 
 // POST /admin/test/credit?key=XXXX
 // body: { discordId: "123", count: 1 }
-app.post("/admin/test/credit", (req, res) => {
+app.post("/admin/test/credit", async (req, res) => {
   const { expected, got } = readAdminKey(req);
   if (!expected || got !== expected) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -100,7 +99,7 @@ app.post("/admin/test/credit", (req, res) => {
     return res.status(400).json({ error: "invalid count" });
 
   try {
-    const updated = manualAddReferral(String(discordId), n);
+    const updated = await manualAddReferral(String(discordId), n);
     return res.json({ ok: true, user: updated });
   } catch (e) {
     console.error("admin credit failed:", e);
@@ -110,7 +109,7 @@ app.post("/admin/test/credit", (req, res) => {
 
 // POST /admin/test/set?key=XXXX
 // body: { discordId: "123", referrals: 0..N, rewarded: 0|1 }
-app.post("/admin/test/set", (req, res) => {
+app.post("/admin/test/set", async (req, res) => {
   const { expected, got } = readAdminKey(req);
   if (!expected || got !== expected) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -129,12 +128,7 @@ app.post("/admin/test/set", (req, res) => {
     return res.status(400).json({ error: "invalid rewarded" });
 
   try {
-    const fn =
-      typeof setReferrals === "function"
-        ? setReferrals
-        : require("./db").setReferrals;
-
-    const updated = fn(String(discordId), r, rw);
+    const updated = await setReferrals(String(discordId), r, rw);
     return res.json({ ok: true, user: updated });
   } catch (e) {
     console.error("admin set failed:", e);
@@ -143,7 +137,7 @@ app.post("/admin/test/set", (req, res) => {
 });
 
 // GET /admin/debug/user?key=XXXX&discordId=123
-app.get("/admin/debug/user", (req, res) => {
+app.get("/admin/debug/user", async (req, res) => {
   const { expected, got } = readAdminKey(req);
   if (!expected || got !== expected) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -153,7 +147,7 @@ app.get("/admin/debug/user", (req, res) => {
   if (!discordId) return res.status(400).json({ error: "missing discordId" });
 
   try {
-    const user = getUser(discordId);
+    const user = await getUser(discordId);
     return res.json({
       ok: true,
       user: user || { discord_user_id: discordId, referrals: 0, rewarded: 0 },
@@ -276,12 +270,12 @@ function verifyWhopSignature(rawBody, timestamp, signature, secret) {
 }
 
 async function awardIfNeeded(discordUserId) {
-  const user = getUser(discordUserId);
+  const user = await getUser(discordUserId);
   if (!user) return;
 
   if ((user.referrals ?? 0) >= 3 && user.rewarded !== 1) {
     // mark first to prevent double-awards
-    markRewarded(discordUserId);
+    await markRewarded(discordUserId);
 
     if (!GUILD_ID || !REWARD_ROLE_ID || !ANNOUNCE_CHANNEL_ID) {
       console.warn(
@@ -317,18 +311,18 @@ client.on("interactionCreate", async (interaction) => {
 
   try {
     if (interaction.commandName === "ref") {
-      const code = getOrCreateRefCode(interaction.user.id);
+      const code = await getOrCreateRefCode(interaction.user.id);
       const link = buildReferralLink(code);
 
       return interaction.reply({
         content: link
-          ? `🔗 ${interaction.user}’s referral link:\n${link}`
-          : `🔗 ${interaction.user}’s referral code:\n\`${code}\`\n\n(Set WHOP_CHECKOUT_URL to show a full link.)`,
+          ? `🔗 ${interaction.user}'s referral link:\n${link}`
+          : `🔗 ${interaction.user}'s referral code:\n\`${code}\`\n\n(Set WHOP_CHECKOUT_URL to show a full link.)`,
       });
     }
 
     if (interaction.commandName === "refstats") {
-      const row = getUser(interaction.user.id);
+      const row = await getUser(interaction.user.id);
       const user = row || { referrals: 0, rewarded: 0 };
 
       return interaction.reply({
@@ -384,11 +378,13 @@ app.post(
       return res.status(400).json({ ok: false, error: "bad_json" });
     }
 
-    const eventType = event?.type;
+    // ✅ normalize event type (handle both "invoice_paid" and "invoice.paid")
+    const eventType = String(event?.type || "").toLowerCase().replace(/_/g, ".");
 
     if (DEBUG_WEBHOOKS) {
       console.log("📩 WHOP WEBHOOK IN:", {
         type: eventType,
+        originalType: event?.type,
         eventId: extractEventId(event),
         hasData: !!event?.data,
         hasMetadata: !!(event?.data?.metadata || event?.metadata),
@@ -396,14 +392,14 @@ app.post(
       });
     }
 
-    // ✅ paid purchase only (support both legacy + v1)
+    // ✅ paid purchase only (support both legacy + v1, normalized)
     const paidTypes = new Set(["invoice.paid", "payment.succeeded"]);
     if (!paidTypes.has(eventType)) {
       return res.status(200).json({ ok: true, ignored: true, type: eventType });
     }
 
     const eventId = extractEventId(event);
-    if (eventId && isEventCounted(eventId)) {
+    if (eventId && await isEventCounted(eventId)) {
       return res.status(200).json({ ok: true, deduped: true });
     }
 
@@ -411,7 +407,7 @@ app.post(
     console.log("🔎 Extracted refCode:", refCode);
 
     if (!refCode) {
-      if (eventId) markEventCounted(eventId);
+      if (eventId) await markEventCounted(eventId);
       return res.status(200).json({
         ok: true,
         ignored: true,
@@ -419,11 +415,11 @@ app.post(
       });
     }
 
-    const discordUserId = lookupDiscordIdByRefCode(refCode);
+    const discordUserId = await lookupDiscordIdByRefCode(refCode);
     console.log("👤 Ref code maps to discordUserId:", discordUserId);
 
     if (!discordUserId) {
-      if (eventId) markEventCounted(eventId);
+      if (eventId) await markEventCounted(eventId);
       return res.status(200).json({
         ok: true,
         ignored: true,
@@ -431,9 +427,9 @@ app.post(
       });
     }
 
-    if (eventId) markEventCounted(eventId);
+    if (eventId) await markEventCounted(eventId);
 
-    const updated = addReferral(discordUserId);
+    const updated = await addReferral(discordUserId);
     console.log("✅ Referral added. Updated user row:", updated);
 
     await awardIfNeeded(discordUserId);
