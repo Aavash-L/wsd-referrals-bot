@@ -42,6 +42,23 @@ client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
+
+client.once("ready", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+
+  // TEMP: one-time manual credit for Hungry Boy
+  try {
+    const { manualAddReferral } = require("./db");
+    const updated = manualAddReferral("728367525326225408", 1);
+    console.log("✅ Manual credit applied to Hungry Boy:", updated);
+  } catch (e) {
+    console.error("❌ Manual credit failed:", e);
+  }
+});
+
+
+
+
 // ---- middleware ----
 app.use((req, res, next) => {
   if (req.path === "/webhooks/whop") return next(); // raw body there
@@ -343,3 +360,4 @@ client.login(DISCORD_TOKEN).catch((err) => {
   console.error("❌ Discord login failed:", err);
   process.exit(1);
 });
+
