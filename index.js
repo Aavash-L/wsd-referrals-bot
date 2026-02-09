@@ -243,11 +243,20 @@ function verifyWhopSignature(rawBody, timestamp, signature, secret) {
   if (!secret) return { ok: false, reason: "missing_secret" };
   if (!timestamp || !signature) return { ok: false, reason: "missing_headers" };
 
-  const parts = String(signature).split(",").map((s) => s.trim());
-  const version = parts[0];
-  const provided = parts[1];
+  // Parse signature - could be "v1,sig" or just "sig"
+  let provided = String(signature).trim();
+  
+  // If it has version prefix, extract just the signature part
+  if (provided.includes(",")) {
+    const parts = provided.split(",").map((s) => s.trim());
+    const version = parts[0];
+    if (version !== "v1") {
+      return { ok: false, reason: "bad_signature_format" };
+    }
+    provided = parts[1];
+  }
 
-  if (version !== "v1" || !provided) {
+  if (!provided) {
     return { ok: false, reason: "bad_signature_format" };
   }
 
@@ -257,14 +266,34 @@ function verifyWhopSignature(rawBody, timestamp, signature, secret) {
     .update(payload)
     .digest("base64");
 
+  if (DEBUG_WEBHOOKS) {
+    console.log("🔐 Signature Debug:", {
+      timestampLength: String(timestamp).length,
+      bodyLength: rawBody.length,
+      providedSigLength: provided.length,
+      expectedSigLength: expected.length,
+      providedSig: provided.substring(0, 20) + "...",
+      expectedSig: expected.substring(0, 20) + "...",
+      secretLength: secret.length,
+      secretPrefix: secret.substring(0, 10) + "...",
+    });
+  }
+
   try {
     const a = Buffer.from(expected);
     const b = Buffer.from(provided);
-    if (a.length !== b.length)
+    if (a.length !== b.length) {
+      if (DEBUG_WEBHOOKS) {
+        console.log("❌ Length mismatch:", a.length, "vs", b.length);
+      }
       return { ok: false, reason: "signature_mismatch" };
+    }
     const ok = crypto.timingSafeEqual(a, b);
     return ok ? { ok: true } : { ok: false, reason: "signature_mismatch" };
-  } catch {
+  } catch (e) {
+    if (DEBUG_WEBHOOKS) {
+      console.log("❌ Compare error:", e.message);
+    }
     return { ok: false, reason: "compare_error" };
   }
 }
