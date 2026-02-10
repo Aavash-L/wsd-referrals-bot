@@ -45,6 +45,15 @@ process.on("uncaughtException", (err) =>
   console.error("uncaughtException:", err)
 );
 
+// ---- STARTUP DEBUG ----
+console.log("🔍 STARTUP CONFIG CHECK:");
+console.log("  WHOP_WEBHOOK_SECRET length:", WHOP_WEBHOOK_SECRET.length);
+console.log("  WHOP_WEBHOOK_SECRET prefix:", WHOP_WEBHOOK_SECRET.substring(0, 15) + "...");
+console.log("  WHOP_WEBHOOK_SECRET suffix:", "..." + WHOP_WEBHOOK_SECRET.substring(WHOP_WEBHOOK_SECRET.length - 15));
+console.log("  Expected length: 69");
+console.log("  DEBUG_WEBHOOKS:", DEBUG_WEBHOOKS);
+console.log("---");
+
 // ---- discord client ----
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
