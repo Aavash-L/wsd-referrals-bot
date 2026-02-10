@@ -8,8 +8,9 @@ const { Pool } = require("pg");
 const DATABASE_URL = process.env.DATABASE_URL;
 
 if (!DATABASE_URL) {
-  console.error("❌ Missing DATABASE_URL. Add it from Railway Postgres -> service variable reference.");
-  // fail fast so you don't think it's "working" while still using ephemeral sqlite
+  console.error(
+    "❌ Missing DATABASE_URL. Add it from Railway Postgres -> service variable reference."
+  );
   process.exit(1);
 }
 
@@ -24,7 +25,6 @@ async function init() {
   if (_initialized) return;
   _initialized = true;
 
-  // Tables (same logical schema as your sqlite)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       discord_user_id TEXT PRIMARY KEY,
@@ -48,7 +48,6 @@ async function init() {
     );
   `);
 
-  // Helpful indexes
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_ref_codes_user ON ref_codes(discord_user_id);`);
 }
 
@@ -63,7 +62,10 @@ async function ensureUser(discordId) {
 
 async function getUser(discordId) {
   await ensureUser(discordId);
-  const { rows } = await pool.query(`SELECT * FROM users WHERE discord_user_id = $1`, [discordId]);
+  const { rows } = await pool.query(
+    `SELECT * FROM users WHERE discord_user_id = $1`,
+    [discordId]
+  );
   return rows[0] || null;
 }
 
@@ -74,7 +76,10 @@ async function markRewarded(discordId) {
 
 async function addReferral(discordId) {
   await ensureUser(discordId);
-  await pool.query(`UPDATE users SET referrals = referrals + 1 WHERE discord_user_id = $1`, [discordId]);
+  await pool.query(
+    `UPDATE users SET referrals = referrals + 1 WHERE discord_user_id = $1`,
+    [discordId]
+  );
   return await getUser(discordId);
 }
 
@@ -87,7 +92,6 @@ async function manualAddReferral(discordId, count = 1) {
   return await getUser(discordId);
 }
 
-// NEW: Set exact referrals and rewarded values (for admin endpoint)
 async function setReferrals(discordId, referrals = 0, rewarded = 0) {
   await ensureUser(discordId);
   await pool.query(
@@ -97,7 +101,6 @@ async function setReferrals(discordId, referrals = 0, rewarded = 0) {
   return await getUser(discordId);
 }
 
-// stable referral code per user (same idea as your sqlite version)
 async function getOrCreateRefCode(discordId) {
   await ensureUser(discordId);
 
@@ -124,15 +127,20 @@ async function getOrCreateRefCode(discordId) {
 
 async function lookupDiscordIdByRefCode(code) {
   await init();
-  const { rows } = await pool.query(`SELECT discord_user_id FROM ref_codes WHERE code = $1`, [code]);
+  const { rows } = await pool.query(
+    `SELECT discord_user_id FROM ref_codes WHERE code = $1`,
+    [code]
+  );
   return rows?.[0]?.discord_user_id || null;
 }
 
-// Deduping (never count same invoice twice)
 async function isEventCounted(eventId) {
   await init();
   if (!eventId) return false;
-  const { rows } = await pool.query(`SELECT event_id FROM counted_events WHERE event_id = $1`, [eventId]);
+  const { rows } = await pool.query(
+    `SELECT event_id FROM counted_events WHERE event_id = $1`,
+    [eventId]
+  );
   return !!rows?.[0];
 }
 
