@@ -1,10 +1,10 @@
-// index.js - main server file for Discord referral program with Whop integration
+//index.js - main server file for Discord referral program with Whop integration
 
 require("dotenv").config();
 
 const express = require("express");
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
-const { Whop } = require("@whop/sdk");
+const { Webhook } = require("svix");
 
 const {
   getUser,
@@ -28,7 +28,9 @@ const GUILD_ID = process.env.GUILD_ID;
 const REWARD_ROLE_ID = process.env.REWARD_ROLE_ID;
 const ANNOUNCE_CHANNEL_ID = process.env.ANNOUNCE_CHANNEL_ID;
 
+// IMPORTANT: keep EXACT secret. Only trim whitespace.
 const WHOP_WEBHOOK_SECRET = String(process.env.WHOP_WEBHOOK_SECRET || "").trim();
+
 const WHOP_CHECKOUT_URL = process.env.WHOP_CHECKOUT_URL || "";
 const DEBUG_WEBHOOKS = String(process.env.DEBUG_WEBHOOKS || "").toLowerCase() === "true";
 
@@ -40,15 +42,12 @@ process.on("uncaughtException", (err) => console.error("uncaughtException:", err
 console.log("🔍 STARTUP CONFIG CHECK:");
 console.log("  WHOP_WEBHOOK_SECRET length:", WHOP_WEBHOOK_SECRET.length);
 console.log("  WHOP_WEBHOOK_SECRET prefix:", WHOP_WEBHOOK_SECRET.substring(0, 15) + "...");
-console.log("  WHOP_WEBHOOK_SECRET suffix:", "..." + WHOP_WEBHOOK_SECRET.substring(Math.max(0, WHOP_WEBHOOK_SECRET.length - 15)));
+console.log(
+  "  WHOP_WEBHOOK_SECRET suffix:",
+  "..." + WHOP_WEBHOOK_SECRET.substring(Math.max(0, WHOP_WEBHOOK_SECRET.length - 15))
+);
 console.log("  DEBUG_WEBHOOKS:", DEBUG_WEBHOOKS);
 console.log("---");
-
-// ---- Whop SDK (V1 webhook verification) ----
-// Whop SDK expects webhookKey as base64
-const whopsdk = new Whop({
-  webhookKey: Buffer.from(WHOP_WEBHOOK_SECRET).toString("base64"),
-});
 
 // ---- discord client ----
 const client = new Client({
@@ -59,200 +58,6 @@ const client = new Client({
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
-
-// -------------------------
-// Helpers
-// -------------------------
-
-function buildReferralLink(code) {
-  if (!WHOP_CHECKOUT_URL) return null;
-  try {
-    const url = new URL(WHOP_CHECKOUT_URL);
-    url.searchParams.set("ref", code);
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
-// deep scan scans strings too
-function extractRefCode(event) {
-  const direct =
-    event?.data?.metadata?.ref ||
-    event?.data?.metadata?.ref_code ||
-    event?.data?.ref ||
-    event?.data?.ref_code ||
-    event?.metadata?.ref ||
-    event?.metadata?.ref_code ||
-    event?.ref ||
-    event?.ref_code;
-
-  if (typeof direct === "string" && direct.trim()) return direct.trim();
-
-  const targetPattern = /\b\d{10,}-[a-z0-9]{4,}\b/i;
-
-  const seen = new Set();
-  function walk(node) {
-    if (node == null) return null;
-
-    if (typeof node === "string") {
-      const m = node.match(targetPattern);
-      return m ? m[0] : null;
-    }
-
-    if (typeof node !== "object") return null;
-
-    if (seen.has(node)) return null;
-    seen.add(node);
-
-    for (const [k, v] of Object.entries(node)) {
-      if (typeof v === "string" && /ref/i.test(k)) {
-        const m = v.match(targetPattern);
-        if (m) return m[0];
-        if (v.trim()) return v.trim();
-      }
-
-      const found = walk(v);
-      if (found) return found;
-    }
-
-    return null;
-  }
-
-  return walk(event);
-}
-
-function extractEventId(event) {
-  return (
-    event?.id ||
-    event?.data?.id ||
-    event?.data?.invoice_id ||
-    event?.data?.payment_id ||
-    event?.invoice_id ||
-    event?.payment_id ||
-    null
-  );
-}
-
-async function awardIfNeeded(discordUserId) {
-  const user = await getUser(discordUserId);
-  if (!user) return;
-
-  if ((user.referrals ?? 0) >= 3 && user.rewarded !== 1) {
-    // mark first to prevent double-awards
-    await markRewarded(discordUserId);
-
-    if (!GUILD_ID || !REWARD_ROLE_ID || !ANNOUNCE_CHANNEL_ID) {
-      console.warn("⚠️ Missing GUILD_ID/REWARD_ROLE_ID/ANNOUNCE_CHANNEL_ID (reward still marked).");
-      return;
-    }
-
-    try {
-      const guild = await client.guilds.fetch(GUILD_ID);
-      const member = await guild.members.fetch(discordUserId);
-
-      await member.roles.add(REWARD_ROLE_ID);
-
-      const channel = await guild.channels.fetch(ANNOUNCE_CHANNEL_ID);
-      if (channel && channel.isTextBased()) {
-        await channel.send(
-          `🎉 <@${discordUserId}> just hit **3 referrals** — granting **1 month free membership**! ✅`
-        );
-      }
-    } catch (err) {
-      console.error("❌ Reward flow failed:", err);
-    }
-  }
-}
-
-// -------------------------
-// Whop webhook (MUST be before express.json())
-// -------------------------
-app.post(
-  "/webhooks/whop",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    const rawBody = req.body?.toString("utf8") || "";
-
-    try {
-      // ✅ Verify + parse using Whop SDK (handles V1 headers correctly)
-      // Whop V1 uses: webhook-id, webhook-timestamp, webhook-signature
-      const event = whopsdk.webhooks.unwrap(rawBody, { headers: req.headers });
-
-      // Normalize type (Whop examples use payment.succeeded; you also had invoice variants)
-      const eventType = String(event?.type || "")
-        .toLowerCase()
-        .replace(/_/g, ".");
-
-      if (DEBUG_WEBHOOKS) {
-        console.log("📩 WHOP WEBHOOK VERIFIED:", {
-          type: eventType,
-          eventId: extractEventId(event),
-          hasData: !!event?.data,
-          extractedRef: extractRefCode(event),
-          headers: {
-            "webhook-id": req.headers["webhook-id"],
-            "webhook-timestamp": req.headers["webhook-timestamp"],
-            "webhook-signature": req.headers["webhook-signature"],
-          },
-        });
-      }
-
-      // ✅ Paid types (support both)
-      const paidTypes = new Set(["payment.succeeded", "invoice.paid", "invoice.paid"]);
-      // If Whop sends invoice_paid, normalize above converts "_" -> "."
-      // so invoice_paid => invoice.paid
-      if (!paidTypes.has(eventType)) {
-        return res.status(200).json({ ok: true, ignored: true, type: eventType });
-      }
-
-      const eventId = extractEventId(event);
-      if (eventId && (await isEventCounted(eventId))) {
-        return res.status(200).json({ ok: true, deduped: true });
-      }
-
-      const refCode = extractRefCode(event);
-      console.log("🔎 Extracted refCode:", refCode);
-
-      // Many Whop “test events” won’t include your ref metadata — this is fine.
-      if (!refCode) {
-        if (eventId) await markEventCounted(eventId);
-        return res.status(200).json({ ok: true, ignored: true, reason: "no_ref_code" });
-      }
-
-      const discordUserId = await lookupDiscordIdByRefCode(refCode);
-      console.log("👤 Ref code maps to discordUserId:", discordUserId);
-
-      if (!discordUserId) {
-        if (eventId) await markEventCounted(eventId);
-        return res.status(200).json({ ok: true, ignored: true, reason: "unknown_ref_code" });
-      }
-
-      if (eventId) await markEventCounted(eventId);
-
-      const updated = await addReferral(discordUserId);
-      console.log("✅ Referral added. Updated user row:", updated);
-
-      await awardIfNeeded(discordUserId);
-
-      return res.status(200).json({ ok: true });
-    } catch (err) {
-      if (DEBUG_WEBHOOKS) {
-        console.error("❌ Whop verify/unwrap failed:", err?.message || err);
-        console.log("📨 RAW BODY (first 200 chars):", rawBody.substring(0, 200));
-        console.log("📨 HEADERS:", {
-          "webhook-id": req.headers["webhook-id"],
-          "webhook-timestamp": req.headers["webhook-timestamp"],
-          "webhook-signature": req.headers["webhook-signature"],
-        });
-      }
-      return res.status(401).json({ ok: false, error: "invalid_signature" });
-    }
-  }
-);
-
-// ---- middleware (json for everything else) ----
-app.use(express.json());
 
 // ---- basic routes ----
 app.get("/", (req, res) => res.status(200).send("ok"));
@@ -269,8 +74,13 @@ function readAdminKey(req) {
   return { expected, got };
 }
 
+// NOTE: webhook route uses raw body. everything else can use json:
+app.use((req, res, next) => {
+  if (req.path === "/webhooks/whop") return next();
+  return express.json()(req, res, next);
+});
+
 // POST /admin/test/credit?key=XXXX
-// body: { discordId: "123", count: 1 }
 app.post("/admin/test/credit", async (req, res) => {
   const { expected, got } = readAdminKey(req);
   if (!expected || got !== expected) return res.status(401).json({ error: "Unauthorized" });
@@ -291,7 +101,6 @@ app.post("/admin/test/credit", async (req, res) => {
 });
 
 // POST /admin/test/set?key=XXXX
-// body: { discordId: "123", referrals: 0..N, rewarded: 0|1 }
 app.post("/admin/test/set", async (req, res) => {
   const { expected, got } = readAdminKey(req);
   if (!expected || got !== expected) return res.status(401).json({ error: "Unauthorized" });
@@ -335,8 +144,107 @@ app.get("/admin/debug/user", async (req, res) => {
 });
 
 // -------------------------
+// Helpers
+// -------------------------
+
+function buildReferralLink(code) {
+  if (!WHOP_CHECKOUT_URL) return null;
+  try {
+    const url = new URL(WHOP_CHECKOUT_URL);
+    url.searchParams.set("ref", code);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function extractRefCode(event) {
+  const direct =
+    event?.data?.metadata?.ref ||
+    event?.data?.metadata?.ref_code ||
+    event?.data?.ref ||
+    event?.data?.ref_code ||
+    event?.metadata?.ref ||
+    event?.metadata?.ref_code ||
+    event?.ref ||
+    event?.ref_code;
+
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  const targetPattern = /\b\d{10,}-[a-z0-9]{4,}\b/i;
+
+  const seen = new Set();
+  function walk(node) {
+    if (node == null) return null;
+    if (typeof node === "string") {
+      const m = node.match(targetPattern);
+      return m ? m[0] : null;
+    }
+    if (typeof node !== "object") return null;
+    if (seen.has(node)) return null;
+    seen.add(node);
+
+    for (const [k, v] of Object.entries(node)) {
+      if (typeof v === "string" && /ref/i.test(k)) {
+        const m = v.match(targetPattern);
+        if (m) return m[0];
+        if (v.trim()) return v.trim();
+      }
+      const found = walk(v);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  return walk(event);
+}
+
+function extractEventId(event) {
+  return (
+    event?.id ||
+    event?.data?.id ||
+    event?.data?.invoice_id ||
+    event?.data?.payment_id ||
+    event?.invoice_id ||
+    event?.payment_id ||
+    null
+  );
+}
+
+async function awardIfNeeded(discordUserId) {
+  const user = await getUser(discordUserId);
+  if (!user) return;
+
+  if ((user.referrals ?? 0) >= 3 && user.rewarded !== 1) {
+    await markRewarded(discordUserId);
+
+    if (!GUILD_ID || !REWARD_ROLE_ID || !ANNOUNCE_CHANNEL_ID) {
+      console.warn("⚠️ Missing GUILD_ID/REWARD_ROLE_ID/ANNOUNCE_CHANNEL_ID (reward still marked).");
+      return;
+    }
+
+    try {
+      const guild = await client.guilds.fetch(GUILD_ID);
+      const member = await guild.members.fetch(discordUserId);
+
+      await member.roles.add(REWARD_ROLE_ID);
+
+      const channel = await guild.channels.fetch(ANNOUNCE_CHANNEL_ID);
+      if (channel && channel.isTextBased()) {
+        await channel.send(
+          `🎉 <@${discordUserId}> just hit **3 referrals** — granting **1 month free membership**! ✅`
+        );
+      }
+    } catch (err) {
+      console.error("❌ Reward flow failed:", err);
+    }
+  }
+}
+
+// -------------------------
 // Slash commands
 // -------------------------
+
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -367,6 +275,92 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 });
+
+// -------------------------
+// Whop webhook (Svix-style V1 verification)
+// -------------------------
+app.post(
+  "/webhooks/whop",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const rawBody = req.body?.toString("utf8") || "";
+
+    // Whop V1 headers (Svix format)
+    const whId = req.header("webhook-id");
+    const whTs = req.header("webhook-timestamp");
+    const whSig = req.header("webhook-signature");
+
+    if (DEBUG_WEBHOOKS) {
+      console.log("📨 WEBHOOK HEADERS:", {
+        "webhook-id": whId,
+        "webhook-timestamp": whTs,
+        "webhook-signature": whSig ? whSig.substring(0, 30) + "..." : null,
+      });
+      console.log("📨 RAW BODY (first 200 chars):", rawBody.substring(0, 200));
+    }
+
+    // Verify signature using Svix (Whop V1)
+    try {
+      const webhook = new Webhook(WHOP_WEBHOOK_SECRET);
+      const event = webhook.verify(rawBody, {
+        "webhook-id": whId,
+        "webhook-timestamp": whTs,
+        "webhook-signature": whSig,
+      });
+
+      const eventType = String(event?.type || "").toLowerCase().replace(/_/g, ".");
+      const eventId = extractEventId(event);
+
+      if (DEBUG_WEBHOOKS) {
+        console.log("✅ WHOP VERIFIED:", {
+          type: eventType,
+          eventId,
+          extractedRef: extractRefCode(event),
+        });
+      }
+
+      // Paid types
+      const paidTypes = new Set(["invoice.paid", "payment.succeeded"]);
+      if (!paidTypes.has(eventType)) {
+        return res.status(200).json({ ok: true, ignored: true, type: eventType });
+      }
+
+      if (eventId && (await isEventCounted(eventId))) {
+        return res.status(200).json({ ok: true, deduped: true });
+      }
+
+      const refCode = extractRefCode(event);
+      console.log("🔎 Extracted refCode:", refCode);
+
+      if (!refCode) {
+        if (eventId) await markEventCounted(eventId);
+        return res.status(200).json({ ok: true, ignored: true, reason: "no_ref_code" });
+      }
+
+      const discordUserId = await lookupDiscordIdByRefCode(refCode);
+      console.log("👤 Ref code maps to discordUserId:", discordUserId);
+
+      if (!discordUserId) {
+        if (eventId) await markEventCounted(eventId);
+        return res.status(200).json({ ok: true, ignored: true, reason: "unknown_ref_code" });
+      }
+
+      if (eventId) await markEventCounted(eventId);
+
+      const updated = await addReferral(discordUserId);
+      console.log("✅ Referral added. Updated user row:", updated);
+
+      await awardIfNeeded(discordUserId);
+
+      return res.status(200).json({ ok: true });
+    } catch (e) {
+      if (DEBUG_WEBHOOKS) {
+        console.warn("❌ Webhook verify failed:", e?.message || e);
+      }
+      return res.status(401).json({ ok: false, error: "invalid_signature" });
+    }
+  }
+);
 
 // ---- start ----
 if (!DISCORD_TOKEN) {
