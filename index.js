@@ -28,10 +28,8 @@ const GUILD_ID = process.env.GUILD_ID;
 const REWARD_ROLE_ID = process.env.REWARD_ROLE_ID;
 const ANNOUNCE_CHANNEL_ID = process.env.ANNOUNCE_CHANNEL_ID;
 
-// ✅ sanitize secret to avoid quote/space issues from Railway UI
-const WHOP_WEBHOOK_SECRET = String(process.env.WHOP_WEBHOOK_SECRET || "")
-  .replace(/^"+|"+$/g, "")
-  .trim();
+// ✅ Just trim whitespace, don't use regex that might corrupt the secret
+const WHOP_WEBHOOK_SECRET = String(process.env.WHOP_WEBHOOK_SECRET || "").trim();
 
 const WHOP_CHECKOUT_URL = process.env.WHOP_CHECKOUT_URL || "";
 const DEBUG_WEBHOOKS =
