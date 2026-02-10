@@ -1,4 +1,4 @@
-//index.js - main server file for Discord referral program with Whop integration
+// index.js - main server file for Discord referral program with Whop integration
 
 require("dotenv").config();
 
@@ -28,9 +28,7 @@ const GUILD_ID = process.env.GUILD_ID;
 const REWARD_ROLE_ID = process.env.REWARD_ROLE_ID;
 const ANNOUNCE_CHANNEL_ID = process.env.ANNOUNCE_CHANNEL_ID;
 
-// IMPORTANT: keep EXACT secret. Only trim whitespace.
 const WHOP_WEBHOOK_SECRET = String(process.env.WHOP_WEBHOOK_SECRET || "").trim();
-
 const WHOP_CHECKOUT_URL = process.env.WHOP_CHECKOUT_URL || "";
 const DEBUG_WEBHOOKS = String(process.env.DEBUG_WEBHOOKS || "").toLowerCase() === "true";
 
@@ -38,14 +36,9 @@ const DEBUG_WEBHOOKS = String(process.env.DEBUG_WEBHOOKS || "").toLowerCase() ==
 process.on("unhandledRejection", (err) => console.error("unhandledRejection:", err));
 process.on("uncaughtException", (err) => console.error("uncaughtException:", err));
 
-// ---- STARTUP DEBUG ----
+// ---- startup ----
 console.log("🔍 STARTUP CONFIG CHECK:");
 console.log("  WHOP_WEBHOOK_SECRET length:", WHOP_WEBHOOK_SECRET.length);
-console.log("  WHOP_WEBHOOK_SECRET prefix:", WHOP_WEBHOOK_SECRET.substring(0, 15) + "...");
-console.log(
-  "  WHOP_WEBHOOK_SECRET suffix:",
-  "..." + WHOP_WEBHOOK_SECRET.substring(Math.max(0, WHOP_WEBHOOK_SECRET.length - 15))
-);
 console.log("  DEBUG_WEBHOOKS:", DEBUG_WEBHOOKS);
 console.log("---");
 
@@ -59,26 +52,32 @@ client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
+// ---- middleware ----
+// Webhook needs RAW body; everything else JSON
+app.use((req, res, next) => {
+  if (req.path === "/webhooks/whop") return next();
+  return express.json()(req, res, next);
+});
+
 // ---- basic routes ----
 app.get("/", (req, res) => res.status(200).send("ok"));
 app.get("/health", (req, res) => res.status(200).json({ ok: true }));
 app.get("/webhooks/whop", (req, res) => res.status(200).send("whop webhook endpoint alive"));
 
+// ✅ DEBUG route to prove POST works + show body length
+app.post("/__debug/post", express.text({ type: "*/*" }), (req, res) => {
+  console.log("✅ HIT /__debug/post", { len: (req.body || "").length });
+  return res.status(200).send("ok");
+});
+
 // -------------------------
 // ADMIN endpoints (manual)
 // -------------------------
-
 function readAdminKey(req) {
   const expected = String(process.env.ADMIN_TEST_KEY || "").trim();
   const got = String(req.query.key || "").trim();
   return { expected, got };
 }
-
-// NOTE: webhook route uses raw body. everything else can use json:
-app.use((req, res, next) => {
-  if (req.path === "/webhooks/whop") return next();
-  return express.json()(req, res, next);
-});
 
 // POST /admin/test/credit?key=XXXX
 app.post("/admin/test/credit", async (req, res) => {
@@ -146,7 +145,6 @@ app.get("/admin/debug/user", async (req, res) => {
 // -------------------------
 // Helpers
 // -------------------------
-
 function buildReferralLink(code) {
   if (!WHOP_CHECKOUT_URL) return null;
   try {
@@ -172,8 +170,8 @@ function extractRefCode(event) {
   if (typeof direct === "string" && direct.trim()) return direct.trim();
 
   const targetPattern = /\b\d{10,}-[a-z0-9]{4,}\b/i;
-
   const seen = new Set();
+
   function walk(node) {
     if (node == null) return null;
     if (typeof node === "string") {
@@ -244,7 +242,6 @@ async function awardIfNeeded(discordUserId) {
 // -------------------------
 // Slash commands
 // -------------------------
-
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -278,36 +275,42 @@ client.on("interactionCreate", async (interaction) => {
 
 // -------------------------
 // Whop webhook (Svix-style V1 verification)
+// IMPORTANT: respond immediately to avoid Whop timeouts.
 // -------------------------
-app.post(
-  "/webhooks/whop",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    const rawBody = req.body?.toString("utf8") || "";
+app.post("/webhooks/whop", express.raw({ type: "application/json" }), async (req, res) => {
+  const rawBody = req.body?.toString("utf8") || "";
 
-    // Whop V1 headers (Svix format)
-    const whId = req.header("webhook-id");
-    const whTs = req.header("webhook-timestamp");
-    const whSig = req.header("webhook-signature");
+  const whId = req.header("webhook-id");
+  const whTs = req.header("webhook-timestamp");
+  const whSig = req.header("webhook-signature");
 
-    if (DEBUG_WEBHOOKS) {
-      console.log("📨 WEBHOOK HEADERS:", {
-        "webhook-id": whId,
-        "webhook-timestamp": whTs,
-        "webhook-signature": whSig ? whSig.substring(0, 30) + "..." : null,
-      });
-      console.log("📨 RAW BODY (first 200 chars):", rawBody.substring(0, 200));
-    }
+  if (DEBUG_WEBHOOKS) {
+    console.log("📨 WEBHOOK HEADERS:", {
+      "webhook-id": whId,
+      "webhook-timestamp": whTs,
+      "webhook-signature": whSig ? whSig.substring(0, 30) + "..." : null,
+    });
+  }
 
-    // Verify signature using Svix (Whop V1)
+  let event;
+  try {
+    const webhook = new Webhook(WHOP_WEBHOOK_SECRET);
+    event = webhook.verify(rawBody, {
+      "webhook-id": whId,
+      "webhook-timestamp": whTs,
+      "webhook-signature": whSig,
+    });
+  } catch (e) {
+    if (DEBUG_WEBHOOKS) console.warn("❌ Webhook verify failed:", e?.message || e);
+    return res.status(401).json({ ok: false, error: "invalid_signature" });
+  }
+
+  // ✅ respond immediately so Whop never times out
+  res.status(200).json({ ok: true });
+
+  // ---- do work async after responding ----
+  (async () => {
     try {
-      const webhook = new Webhook(WHOP_WEBHOOK_SECRET);
-      const event = webhook.verify(rawBody, {
-        "webhook-id": whId,
-        "webhook-timestamp": whTs,
-        "webhook-signature": whSig,
-      });
-
       const eventType = String(event?.type || "").toLowerCase().replace(/_/g, ".");
       const eventId = extractEventId(event);
 
@@ -319,14 +322,13 @@ app.post(
         });
       }
 
-      // Paid types
-      const paidTypes = new Set(["invoice.paid", "payment.succeeded"]);
+      const paidTypes = new Set(["invoice.paid", "payment.succeeded", "invoice.paid.v1", "invoice.paid.v2"]);
       if (!paidTypes.has(eventType)) {
-        return res.status(200).json({ ok: true, ignored: true, type: eventType });
+        return;
       }
 
       if (eventId && (await isEventCounted(eventId))) {
-        return res.status(200).json({ ok: true, deduped: true });
+        return;
       }
 
       const refCode = extractRefCode(event);
@@ -334,7 +336,7 @@ app.post(
 
       if (!refCode) {
         if (eventId) await markEventCounted(eventId);
-        return res.status(200).json({ ok: true, ignored: true, reason: "no_ref_code" });
+        return;
       }
 
       const discordUserId = await lookupDiscordIdByRefCode(refCode);
@@ -342,7 +344,7 @@ app.post(
 
       if (!discordUserId) {
         if (eventId) await markEventCounted(eventId);
-        return res.status(200).json({ ok: true, ignored: true, reason: "unknown_ref_code" });
+        return;
       }
 
       if (eventId) await markEventCounted(eventId);
@@ -351,16 +353,11 @@ app.post(
       console.log("✅ Referral added. Updated user row:", updated);
 
       await awardIfNeeded(discordUserId);
-
-      return res.status(200).json({ ok: true });
-    } catch (e) {
-      if (DEBUG_WEBHOOKS) {
-        console.warn("❌ Webhook verify failed:", e?.message || e);
-      }
-      return res.status(401).json({ ok: false, error: "invalid_signature" });
+    } catch (err) {
+      console.error("❌ Webhook async processing failed:", err);
     }
-  }
-);
+  })();
+});
 
 // ---- start ----
 if (!DISCORD_TOKEN) {
