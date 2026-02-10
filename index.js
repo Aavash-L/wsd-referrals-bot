@@ -381,6 +381,15 @@ app.post(
     const signature = req.header("webhook-signature");
     const timestamp = req.header("webhook-timestamp");
 
+    if (DEBUG_WEBHOOKS) {
+      console.log("📨 RAW WEBHOOK HEADERS:", {
+        signature: signature,
+        timestamp: timestamp,
+        allHeaders: JSON.stringify(req.headers, null, 2),
+      });
+      console.log("📨 RAW BODY (first 200 chars):", rawBody.substring(0, 200));
+    }
+
     const verified = verifyWhopSignature(
       rawBody,
       timestamp,
