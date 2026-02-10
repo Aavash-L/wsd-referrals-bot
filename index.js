@@ -20,6 +20,10 @@ const {
 
 const app = express();
 
+const BUILD_SHA = process.env.RAILWAY_GIT_COMMIT_SHA || "unknown";
+app.get("/__debug/version", (req, res) => res.json({ ok: true, sha: BUILD_SHA }));
+
+
 // ---- env ----
 const PORT = process.env.PORT || 3000;
 
