@@ -23,6 +23,12 @@ const app = express();
 // ---- env ----
 const PORT = process.env.PORT || 3000;
 
+// DEBUG: Log raw env var BEFORE any processing
+console.log("🔍 RAW ENV DEBUG:");
+console.log("  RAW process.env.WHOP_WEBHOOK_SECRET length:", (process.env.WHOP_WEBHOOK_SECRET || "").length);
+console.log("  RAW value:", process.env.WHOP_WEBHOOK_SECRET);
+console.log("---");
+
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const REWARD_ROLE_ID = process.env.REWARD_ROLE_ID;
