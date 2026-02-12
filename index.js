@@ -185,12 +185,17 @@ function buildReferralLink(code) {
   if (!WHOP_CHECKOUT_URL) return null;
   try {
     const url = new URL(WHOP_CHECKOUT_URL);
-    url.searchParams.set("ref", code);
+
+    // MODE B: force Whop to include this in webhook payload
+    // so we can credit referrals reliably.
+    url.searchParams.set("metadata[ref]", code);
+
     return url.toString();
   } catch {
     return null;
   }
 }
+
 
 function normalizeEventType(t) {
   return String(t || "").trim().toLowerCase().replace(/_/g, ".");
