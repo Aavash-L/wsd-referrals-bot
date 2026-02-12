@@ -1,28 +1,13 @@
-const express = require('express');
+// webhook.js (legacy file, safe no-op)
+// Only used if you do: app.use("/webhooks", require("./webhook"))
+// If index.js handles /webhooks/whop directly, you can delete this file.
 
+const express = require("express");
 const router = express.Router();
 
-// IMPORTANT: use raw body for Whop (needed for signature verification later)
-router.post(
-  '/whop',
-  express.raw({ type: '*/*' }),
-  (req, res) => {
-    try {
-      const payload = req.body.toString();
-      console.log('📩 Whop webhook received');
-      console.log(payload);
-
-      // TODO later:
-      // 1) Verify webhook signature
-      // 2) Parse event
-      // 3) Increment referrals
-
-      res.sendStatus(200);
-    } catch (err) {
-      console.error('❌ Whop webhook error:', err);
-      res.sendStatus(400);
-    }
-  }
-);
+router.post("/whop", express.raw({ type: "application/json" }), (req, res) => {
+  console.log("⚠️ webhook.js hit (legacy). index.js should handle /webhooks/whop instead.");
+  return res.status(200).send("ok");
+});
 
 module.exports = router;

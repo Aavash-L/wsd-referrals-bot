@@ -1,5 +1,5 @@
 // db.js (Postgres-backed, persistent)
-// Keeps same public API you already use:
+// API:
 // getUser, addReferral, markRewarded, getOrCreateRefCode, lookupDiscordIdByRefCode,
 // isEventCounted, markEventCounted, manualAddReferral, setReferrals
 
@@ -8,15 +8,17 @@ const { Pool } = require("pg");
 const DATABASE_URL = process.env.DATABASE_URL;
 
 if (!DATABASE_URL) {
-  console.error(
-    "❌ Missing DATABASE_URL. Add it from Railway Postgres -> service variable reference."
-  );
+  console.error("❌ Missing DATABASE_URL. Add it from Railway Postgres -> service variable reference.");
   process.exit(1);
 }
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false },
+});
+
+pool.on("error", (err) => {
+  console.error("❌ Postgres pool error:", err);
 });
 
 let _initialized = false;
@@ -62,10 +64,7 @@ async function ensureUser(discordId) {
 
 async function getUser(discordId) {
   await ensureUser(discordId);
-  const { rows } = await pool.query(
-    `SELECT * FROM users WHERE discord_user_id = $1`,
-    [discordId]
-  );
+  const { rows } = await pool.query(`SELECT * FROM users WHERE discord_user_id = $1`, [discordId]);
   return rows[0] || null;
 }
 
@@ -76,19 +75,13 @@ async function markRewarded(discordId) {
 
 async function addReferral(discordId) {
   await ensureUser(discordId);
-  await pool.query(
-    `UPDATE users SET referrals = referrals + 1 WHERE discord_user_id = $1`,
-    [discordId]
-  );
+  await pool.query(`UPDATE users SET referrals = referrals + 1 WHERE discord_user_id = $1`, [discordId]);
   return await getUser(discordId);
 }
 
 async function manualAddReferral(discordId, count = 1) {
   await ensureUser(discordId);
-  await pool.query(
-    `UPDATE users SET referrals = referrals + $1 WHERE discord_user_id = $2`,
-    [count, discordId]
-  );
+  await pool.query(`UPDATE users SET referrals = referrals + $1 WHERE discord_user_id = $2`, [count, discordId]);
   return await getUser(discordId);
 }
 
@@ -117,30 +110,21 @@ async function getOrCreateRefCode(discordId) {
   const rand = Math.random().toString(36).slice(2, 8);
   const code = `${discordId}-${rand}`.slice(0, 48);
 
-  await pool.query(
-    `INSERT INTO ref_codes (code, discord_user_id) VALUES ($1, $2)`,
-    [code, discordId]
-  );
+  await pool.query(`INSERT INTO ref_codes (code, discord_user_id) VALUES ($1, $2)`, [code, discordId]);
 
   return code;
 }
 
 async function lookupDiscordIdByRefCode(code) {
   await init();
-  const { rows } = await pool.query(
-    `SELECT discord_user_id FROM ref_codes WHERE code = $1`,
-    [code]
-  );
+  const { rows } = await pool.query(`SELECT discord_user_id FROM ref_codes WHERE code = $1`, [code]);
   return rows?.[0]?.discord_user_id || null;
 }
 
 async function isEventCounted(eventId) {
   await init();
   if (!eventId) return false;
-  const { rows } = await pool.query(
-    `SELECT event_id FROM counted_events WHERE event_id = $1`,
-    [eventId]
-  );
+  const { rows } = await pool.query(`SELECT event_id FROM counted_events WHERE event_id = $1`, [eventId]);
   return !!rows?.[0];
 }
 

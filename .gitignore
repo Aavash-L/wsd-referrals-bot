@@ -1,10 +1,10 @@
 # Dependencies
 node_modules/
 
-# Environment variables
+# Env
 .env
 
-# Database files
+# Database / local junk
 data.db
 *.sqlite
 *.sqlite3
@@ -18,7 +18,7 @@ yarn-error.log*
 # OS files
 .DS_Store
 
-# Editor files
+# Editor
 .vscode/
 .idea/
 

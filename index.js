@@ -1,4 +1,6 @@
 // index.js - Discord referral bot + Whop webhook (Postgres db.js)
+// MODE B ONLY: Secure webhook via URL token (/webhooks/whop/:token)
+//
 // Features kept:
 // - /ref generates stable ref code + link
 // - /refstats shows X/3
@@ -8,10 +10,8 @@
 
 require("dotenv").config();
 
-const crypto = require("crypto");
 const express = require("express");
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
-const { Webhook } = require("svix");
 
 const {
   getUser,
@@ -31,25 +31,33 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+
 const GUILD_ID = process.env.GUILD_ID;
 const REWARD_ROLE_ID = process.env.REWARD_ROLE_ID;
 const ANNOUNCE_CHANNEL_ID = process.env.ANNOUNCE_CHANNEL_ID;
 
-const WHOP_WEBHOOK_SECRET = String(process.env.WHOP_WEBHOOK_SECRET || "");
 const WHOP_CHECKOUT_URL = process.env.WHOP_CHECKOUT_URL || "";
-const DEBUG_WEBHOOKS = String(process.env.DEBUG_WEBHOOKS || "").toLowerCase() === "true";
+const WEBHOOK_URL_TOKEN = String(process.env.WEBHOOK_URL_TOKEN || "").trim();
+
+const DEBUG_WEBHOOKS =
+  String(process.env.DEBUG_WEBHOOKS || "").toLowerCase() === "true";
 
 const BUILD_SHA = process.env.RAILWAY_GIT_COMMIT_SHA || "unknown";
 
 // ---- crash logs ----
-process.on("unhandledRejection", (err) => console.error("unhandledRejection:", err));
-process.on("uncaughtException", (err) => console.error("uncaughtException:", err));
+process.on("unhandledRejection", (err) =>
+  console.error("unhandledRejection:", err)
+);
+process.on("uncaughtException", (err) =>
+  console.error("uncaughtException:", err)
+);
 
-// ---- STARTUP DEBUG (NO secret leak) ----
+// ---- STARTUP DEBUG (NO secret leaks) ----
 console.log("🔎 STARTUP CONFIG CHECK:");
-console.log("  DEBUG_WEBHOOKS:", DEBUG_WEBHOOKS);
-console.log("  WHOP_WEBHOOK_SECRET length:", WHOP_WEBHOOK_SECRET.length);
 console.log("  BUILD SHA:", BUILD_SHA);
+console.log("  DEBUG_WEBHOOKS:", DEBUG_WEBHOOKS);
+console.log("  WEBHOOK_URL_TOKEN length:", WEBHOOK_URL_TOKEN.length);
 console.log("---");
 
 // ---- discord client ----
@@ -65,23 +73,28 @@ client.once("ready", () => {
 // ---- middleware ----
 // webhook must be raw; everything else JSON
 app.use((req, res, next) => {
-  if (req.path === "/webhooks/whop") return next();
+  if (req.path.startsWith("/webhooks/whop")) return next();
   return express.json()(req, res, next);
 });
 
 // ---- basic routes ----
 app.get("/", (req, res) => res.status(200).send("ok"));
 app.get("/health", (req, res) => res.status(200).json({ ok: true }));
-app.get("/webhooks/whop", (req, res) => res.status(200).send("whop webhook endpoint alive"));
 
-// debug routes (safe)
-app.get("/__debug/version", (req, res) => res.json({ ok: true, sha: BUILD_SHA }));
+// Safe debug routes
+app.get("/__debug/version", (req, res) =>
+  res.json({ ok: true, sha: BUILD_SHA })
+);
 app.post("/__debug/post", express.text({ type: "*/*" }), (req, res) => {
   console.log("✅ HIT /__debug/post", { len: (req.body || "").length });
   return res.status(200).send("ok");
 });
-app.get("/__debug/whoplen", (req, res) =>
-  res.json({ ok: true, whopSecretLen: WHOP_WEBHOOK_SECRET.length })
+app.get("/__debug/webhook_mode", (req, res) =>
+  res.json({
+    ok: true,
+    mode: "URL_TOKEN",
+    webhookUrlTokenLen: WEBHOOK_URL_TOKEN.length,
+  })
 );
 
 // -------------------------
@@ -96,13 +109,16 @@ function readAdminKey(req) {
 // POST /admin/test/credit?key=XXXX
 app.post("/admin/test/credit", async (req, res) => {
   const { expected, got } = readAdminKey(req);
-  if (!expected || got !== expected) return res.status(401).json({ error: "Unauthorized" });
+  if (!expected || got !== expected) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
   const { discordId, count } = req.body || {};
   if (!discordId) return res.status(400).json({ error: "missing discordId" });
 
   const n = Number(count ?? 1);
-  if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ error: "invalid count" });
+  if (!Number.isFinite(n) || n <= 0)
+    return res.status(400).json({ error: "invalid count" });
 
   try {
     const updated = await manualAddReferral(String(discordId), n);
@@ -116,7 +132,9 @@ app.post("/admin/test/credit", async (req, res) => {
 // POST /admin/test/set?key=XXXX
 app.post("/admin/test/set", async (req, res) => {
   const { expected, got } = readAdminKey(req);
-  if (!expected || got !== expected) return res.status(401).json({ error: "Unauthorized" });
+  if (!expected || got !== expected) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
   const { discordId, referrals, rewarded } = req.body || {};
   if (!discordId) return res.status(400).json({ error: "missing discordId" });
@@ -124,8 +142,10 @@ app.post("/admin/test/set", async (req, res) => {
   const r = Number(referrals ?? 0);
   const rw = Number(rewarded ?? 0);
 
-  if (!Number.isFinite(r) || r < 0) return res.status(400).json({ error: "invalid referrals" });
-  if (!Number.isFinite(rw) || (rw !== 0 && rw !== 1)) return res.status(400).json({ error: "invalid rewarded" });
+  if (!Number.isFinite(r) || r < 0)
+    return res.status(400).json({ error: "invalid referrals" });
+  if (!Number.isFinite(rw) || (rw !== 0 && rw !== 1))
+    return res.status(400).json({ error: "invalid rewarded" });
 
   try {
     const updated = await setReferrals(String(discordId), r, rw);
@@ -139,7 +159,9 @@ app.post("/admin/test/set", async (req, res) => {
 // GET /admin/debug/user?key=XXXX&discordId=123
 app.get("/admin/debug/user", async (req, res) => {
   const { expected, got } = readAdminKey(req);
-  if (!expected || got !== expected) return res.status(401).json({ error: "Unauthorized" });
+  if (!expected || got !== expected) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
   const discordId = String(req.query.discordId || "");
   if (!discordId) return res.status(400).json({ error: "missing discordId" });
@@ -168,6 +190,10 @@ function buildReferralLink(code) {
   } catch {
     return null;
   }
+}
+
+function normalizeEventType(t) {
+  return String(t || "").trim().toLowerCase().replace(/_/g, ".");
 }
 
 function extractEventId(event) {
@@ -200,11 +226,13 @@ function extractRefCode(event) {
   const seen = new Set();
   function walk(node) {
     if (node == null) return null;
+
     if (typeof node === "string") {
       const m = node.match(targetPattern);
       return m ? m[0] : null;
     }
     if (typeof node !== "object") return null;
+
     if (seen.has(node)) return null;
     seen.add(node);
 
@@ -223,33 +251,6 @@ function extractRefCode(event) {
   return walk(event);
 }
 
-// Fallback legacy verifier (in case Whop doesn't send svix headers)
-function verifyLegacyHmac(rawBody, timestamp, signature, secret) {
-  if (!secret) return { ok: false, reason: "missing_secret" };
-  if (!timestamp || !signature) return { ok: false, reason: "missing_headers" };
-
-  // signature can be "v1,<sig>" or "<sig>"
-  let provided = String(signature).trim();
-  if (provided.includes(",")) {
-    const parts = provided.split(",").map((s) => s.trim());
-    if (parts[0] !== "v1") return { ok: false, reason: "bad_signature_format" };
-    provided = parts[1];
-  }
-  if (!provided) return { ok: false, reason: "bad_signature_format" };
-
-  const payload = `${timestamp}.${rawBody}`;
-  const expected = crypto.createHmac("sha256", secret).update(payload).digest("base64");
-
-  try {
-    const a = Buffer.from(expected);
-    const b = Buffer.from(provided);
-    if (a.length !== b.length) return { ok: false, reason: "signature_mismatch" };
-    return crypto.timingSafeEqual(a, b) ? { ok: true } : { ok: false, reason: "signature_mismatch" };
-  } catch {
-    return { ok: false, reason: "compare_error" };
-  }
-}
-
 async function awardIfNeeded(discordUserId) {
   const user = await getUser(discordUserId);
   if (!user) return;
@@ -258,7 +259,9 @@ async function awardIfNeeded(discordUserId) {
     await markRewarded(discordUserId);
 
     if (!GUILD_ID || !REWARD_ROLE_ID || !ANNOUNCE_CHANNEL_ID) {
-      console.warn("⚠️ Missing GUILD_ID/REWARD_ROLE_ID/ANNOUNCE_CHANNEL_ID (reward still marked).");
+      console.warn(
+        "⚠️ Missing GUILD_ID/REWARD_ROLE_ID/ANNOUNCE_CHANNEL_ID (reward still marked)."
+      );
       return;
     }
 
@@ -308,119 +311,109 @@ client.on("interactionCreate", async (interaction) => {
   } catch (err) {
     console.error("interactionCreate error:", err);
     if (!interaction.replied && !interaction.deferred) {
-      return interaction.reply({ content: "❌ Something went wrong. Try again.", ephemeral: true });
+      return interaction.reply({
+        content: "❌ Something went wrong. Try again.",
+        ephemeral: true,
+      });
     }
   }
 });
 
 // -------------------------
-// Whop webhook (supports Svix V1 headers + legacy fallback)
+// Whop webhook (MODE B: tokenized URL)
 // -------------------------
-app.post("/webhooks/whop", express.raw({ type: "application/json" }), async (req, res) => {
-  const rawBody = req.body?.toString("utf8") || "";
-
-  // Whop V1 (Svix-style) headers:
-  const whId = req.header("webhook-id");
-  const whTs = req.header("webhook-timestamp");
-  const whSig = req.header("webhook-signature");
-
-  if (DEBUG_WEBHOOKS) {
-    console.log("📨 /webhooks/whop HEADERS:", {
-      "webhook-id": whId || null,
-      "webhook-timestamp": whTs || null,
-      "webhook-signature": whSig ? whSig.substring(0, 40) + "..." : null,
-      hasSecret: !!WHOP_WEBHOOK_SECRET,
-      secretLen: WHOP_WEBHOOK_SECRET.length,
-    });
-  }
-
-  // 1) Try Svix verify if V1 headers exist
-  let event = null;
-  let verified = false;
-
-  if (whId && whTs && whSig) {
-    try {
-      const webhook = new Webhook(WHOP_WEBHOOK_SECRET);
-      event = webhook.verify(rawBody, {
-        "webhook-id": whId,
-        "webhook-timestamp": whTs,
-        "webhook-signature": whSig,
-      });
-      verified = true;
-    } catch (e) {
-      if (DEBUG_WEBHOOKS) console.warn("❌ Svix verify failed:", e?.message || e);
+app.post(
+  "/webhooks/whop/:token",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    if (!WEBHOOK_URL_TOKEN) {
+      return res
+        .status(500)
+        .json({ ok: false, error: "missing_WEBHOOK_URL_TOKEN" });
     }
-  }
 
-  // 2) Fallback: legacy HMAC style (just in case)
-  if (!verified) {
-    const legacy = verifyLegacyHmac(rawBody, whTs, whSig, WHOP_WEBHOOK_SECRET);
-    if (!legacy.ok) {
-      return res.status(401).json({ ok: false, error: "invalid_signature", reason: legacy.reason });
+    if (String(req.params.token || "") !== WEBHOOK_URL_TOKEN) {
+      return res.status(401).json({ ok: false, error: "bad_webhook_token" });
     }
+
+    const rawBody = req.body?.toString("utf8") || "";
+
+    let event;
     try {
       event = JSON.parse(rawBody);
-      verified = true;
     } catch {
       return res.status(400).json({ ok: false, error: "bad_json" });
     }
-  }
 
-  // normalize type
-  const eventType = String(event?.type || "").toLowerCase().replace(/_/g, ".");
-  const eventId = extractEventId(event);
+    const eventType = normalizeEventType(event?.type);
+    const eventId = extractEventId(event);
 
-  if (DEBUG_WEBHOOKS) {
-    console.log("📩 WHOP VERIFIED EVENT:", {
-      type: eventType,
-      eventId,
-      extractedRef: extractRefCode(event),
-    });
-  }
+    if (DEBUG_WEBHOOKS) {
+      console.log("📩 WHOP EVENT:", {
+        type: eventType,
+        eventId,
+        extractedRef: extractRefCode(event),
+      });
+    }
 
-  // only credit paid purchases
-  const paidTypes = new Set(["invoice.paid", "payment.succeeded"]);
-  if (!paidTypes.has(eventType)) {
-    return res.status(200).json({ ok: true, ignored: true, type: eventType });
-  }
+    // Credit only paid events
+    const paidTypes = new Set(["invoice.paid", "payment.succeeded"]);
+    if (!paidTypes.has(eventType)) {
+      return res.status(200).json({ ok: true, ignored: true, type: eventType });
+    }
 
-  if (eventId && (await isEventCounted(eventId))) {
-    return res.status(200).json({ ok: true, deduped: true });
-  }
+    // Dedup
+    if (eventId && (await isEventCounted(eventId))) {
+      return res.status(200).json({ ok: true, deduped: true });
+    }
 
-  const refCode = extractRefCode(event);
-  console.log("🔎 Extracted refCode:", refCode);
+    const refCode = extractRefCode(event);
+    console.log("🔎 Extracted refCode:", refCode);
 
-  if (!refCode) {
+    if (!refCode) {
+      if (eventId) await markEventCounted(eventId);
+      return res.status(200).json({
+        ok: true,
+        ignored: true,
+        reason: "no_ref_code",
+      });
+    }
+
+    const discordUserId = await lookupDiscordIdByRefCode(refCode);
+    console.log("👤 Ref code maps to discordUserId:", discordUserId);
+
+    if (!discordUserId) {
+      if (eventId) await markEventCounted(eventId);
+      return res.status(200).json({
+        ok: true,
+        ignored: true,
+        reason: "unknown_ref_code",
+      });
+    }
+
     if (eventId) await markEventCounted(eventId);
-    return res.status(200).json({ ok: true, ignored: true, reason: "no_ref_code" });
+
+    const updated = await addReferral(discordUserId);
+    console.log("✅ Referral added. Updated user row:", updated);
+
+    await awardIfNeeded(discordUserId);
+
+    return res.status(200).json({ ok: true });
   }
-
-  const discordUserId = await lookupDiscordIdByRefCode(refCode);
-  console.log("👤 Ref code maps to discordUserId:", discordUserId);
-
-  if (!discordUserId) {
-    if (eventId) await markEventCounted(eventId);
-    return res.status(200).json({ ok: true, ignored: true, reason: "unknown_ref_code" });
-  }
-
-  if (eventId) await markEventCounted(eventId);
-
-  const updated = await addReferral(discordUserId);
-  console.log("✅ Referral added. Updated user row:", updated);
-
-  await awardIfNeeded(discordUserId);
-
-  return res.status(200).json({ ok: true });
-});
+);
 
 // ---- start ----
 if (!DISCORD_TOKEN) {
   console.error("❌ Missing DISCORD_TOKEN");
   process.exit(1);
 }
+if (!CLIENT_ID) {
+  console.warn("⚠️ Missing CLIENT_ID (only needed to register slash commands).");
+}
 
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server listening on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () =>
+  console.log(`🚀 Server listening on port ${PORT}`)
+);
 
 client.login(DISCORD_TOKEN).catch((err) => {
   console.error("❌ Discord login failed:", err);

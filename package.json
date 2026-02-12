@@ -1,18 +1,14 @@
 {
   "name": "wsd-referrals-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Discord referral bot + Whop webhook",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "commands": "node commands.js"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
   "dependencies": {
-    "@whop/sdk": "^0.0.27",
-    "better-sqlite3": "^12.6.2",
     "discord.js": "^14.25.1",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
